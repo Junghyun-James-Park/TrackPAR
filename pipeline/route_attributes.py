@@ -14,6 +14,16 @@ FRAME?
 difference: the route is the same whether the attribute sits on the face or the
 trousers.
 
+The prompt states the deployment window, and that is not decoration. Asked in
+general, the same object routes two ways depending on what it is called:
+`Accessory-Bag` came back identity ("a fixed accessory") while
+`carrying_by_hand` came back momentary ("hand position and object held"). The
+answer also moved with the batch — the accessories routed identity when listed
+beside other appearance attributes and momentary when listed beside actions.
+Naming the window (a fixed camera, a person crossing it in seconds) fixed eight
+of twenty boundary cases and broke none, and left `exposed` and `watched`
+momentary, which is the constraint that keeps the rule honest.
+
 Results are cached in out/attr_routing.json. An attribute already routed is not
 sent to the model again, so re-running is free and the routing of a given
 attribute does not drift between runs.
@@ -34,15 +44,30 @@ CACHE = os.path.join(OUTDIR, "attr_routing.json")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 PROMPT = """You are the router of an automatic labelling system for CCTV video.
-People are tracked across frames. For each attribute you are given, decide how it
-should be labelled.
+
+The setting matters for every answer below. The camera is FIXED and mounted
+overhead. A person walks into view, crosses it and leaves, so one person's
+track is a few seconds long — often only a handful of frames. Decide each
+attribute for THAT SHORT WINDOW, not for the person's whole day.
 
 Q1 "kind":
-  - "identity"  : a property of the PERSON. It holds for every frame of that
-                  person's track. Seeing several frames together helps, because
-                  they are several views of one fixed fact.
-  - "momentary" : a property of the FRAME. The same person can be true in one
-                  frame and false in the next. Each frame needs its own answer.
+  - "identity"  : the value is the same in every frame of that person's track.
+                  This includes anything that could change in principle but will
+                  not change while someone walks past a camera: clothing and its
+                  colour, hair, glasses, a hat, a bag or backpack they are
+                  carrying. They arrived with it and they leave with it.
+                  Several frames are then several views of ONE answer, and
+                  seeing them together helps.
+  - "momentary" : the value genuinely DIFFERS between frames of the SAME person
+                  inside that short window. Ask yourself: if I looked at this
+                  person in frame 1 and again in frame 5, could the honest
+                  answer flip? Things that do flip: whether the face is visible,
+                  which way the head is turned, where they are looking, whether
+                  a shelf is in the way. Each frame then needs its own answer.
+
+When unsure, choose "identity". A momentary attribute costs one model call per
+frame and cannot use the track; treating a stable attribute as momentary throws
+that away for nothing.
 
 Q2 "facial" — answer only when kind is "momentary", otherwise "n/a". Is the
    attribute decided by looking at the person's FACE, HEAD ORIENTATION or GAZE?

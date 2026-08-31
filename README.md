@@ -52,23 +52,16 @@ property of the person, or a property of the frame?**
                       identity     │    momentary
                ┌───────────────────┴───────────────────┐
                ▼                                       ▼
-   ┌───────────────────────┐             ┌───────────────────────────┐
-   │ 1. SAM 3 tracking     │             │ no tracking: the boxes    │
-   │ 2. fragments          │             │ come straight from the    │
-   │ 3. gender   K=4       │             │ annotation file           │
-   │ 4. age      K=4       │             └─────────────┬─────────────┘
-   │                       │           facial          │       non-facial
-   │ one answer per TRACK  │              ┌────────────┴────────────┐
-   └───────────┬───────────┘              ▼                         ▼
-               │               ┌─────────────────────┐   ┌─────────────────────┐
-               │               │ crop of ONE person  │   │ full scene + boxes  │
-               │               │ eyes / svfd         │   │ PADQ template       │
-               │               └──────────┬──────────┘   └──────────┬──────────┘
-               │                          └────────────┬────────────┘
-               │                                       ▼
-               │                         5. one call per FRAME  (K=1)
-               │                             one answer per FRAME
-               │                                       │
+   ┌───────────────────────┐             ┌─────────────────────────────┐
+   │ 1. SAM 3 tracking     │             │ no tracking: the boxes      │
+   │ 2. fragments          │             │ come straight from the      │
+   │ 3. gender   K=4       │             │ annotation file             │
+   │ 4. age      K=4       │             │                             │
+   │                       │             │ facial / non-facial         │
+   │                       │             │   selects the prompt        │
+   │ one answer per TRACK  │             │ 5. one call per FRAME       │
+   │                       │             │    one answer per FRAME     │
+   └───────────┬───────────┘             └─────────────┬───────────────┘
                └───────────────────┬───────────────────┘
                                    ▼
                         6. merge → labels.json
@@ -135,6 +128,22 @@ route ──▶ identity ──▶ K frames of one subject in a single call
                                   facial     → eyes, svfd, combined
                                   non-facial → the PADQ template
 ```
+
+The two exemplar families also differ in **what the model is shown**, which is
+the part that is easy to miss:
+
+| | crop family (`prompts/crop/`) | PADQ (`prompts/padq/`) |
+|---|---|---|
+| images per call | 2 | 1 |
+| what they are | the full scene with the target in a red box, **and** a crop of that person with the background removed | the full scene only |
+| how the target is named | visually, by the box and the crop | in text, as `{bboxes}` coordinates |
+| people per call | 1 | all `{n}` of them |
+| attributes per call | several observation fields | 1 |
+
+Both were measured under `--repr full_mask`, which is what produces that pair of
+images, and it is also the deployment default. So the crop family never sees a
+crop on its own; it sees the scene as well. The directory name is shorter than
+the truth.
 
 Whether an existing prompt is reused comes from an explicit table, not a model
 judgement. Two of the four shipped attributes have prompts written specifically
@@ -508,7 +517,7 @@ only 536 answers carried the requested field. The runner prints
 Twelve prompts, all of which were scored. They fall into families, and the
 families are the interesting part.
 
-### `prompts/crop/` — one cropped person per call
+### `prompts/crop/` — one person per call, scene plus crop
 
 | prompt | idea |
 |---|---|
@@ -621,7 +630,7 @@ pipeline/label_attribute.py  the end-to-end runner behind it
 pipeline/make_prompt.py      write a prompt for a new attribute
 pipeline/                    the rest of the run
 eval/                        scoring, with confidence intervals
-prompts/crop/                8 prompts, one cropped person per call
+prompts/crop/                8 prompts, one person per call (scene + crop)
 prompts/padq/                4 prompts, full scene + boxes, one attribute per call
 run_all.sh                   all stages, resumable
 docs/FINAL_REPORT.md         the delivered system

@@ -18,23 +18,16 @@ model one question and everything else follows from the answer.
                       identity     │    momentary
                ┌───────────────────┴───────────────────┐
                ▼                                       ▼
-   ┌───────────────────────┐             ┌───────────────────────────┐
-   │ 1. SAM 3 tracking     │             │ no tracking: the boxes    │
-   │ 2. fragments          │             │ come straight from the    │
-   │ 3. gender   K=4       │             │ annotation file           │
-   │ 4. age      K=4       │             └─────────────┬─────────────┘
-   │                       │           facial          │       non-facial
-   │ one answer per TRACK  │              ┌────────────┴────────────┐
-   └───────────┬───────────┘              ▼                         ▼
-               │               ┌─────────────────────┐   ┌─────────────────────┐
-               │               │ crop of ONE person  │   │ full scene + boxes  │
-               │               │ eyes / svfd         │   │ PADQ template       │
-               │               └──────────┬──────────┘   └──────────┬──────────┘
-               │                          └────────────┬────────────┘
-               │                                       ▼
-               │                         5. one call per FRAME  (K=1)
-               │                             one answer per FRAME
-               │                                       │
+   ┌───────────────────────┐             ┌─────────────────────────────┐
+   │ 1. SAM 3 tracking     │             │ no tracking: the boxes      │
+   │ 2. fragments          │             │ come straight from the      │
+   │ 3. gender   K=4       │             │ annotation file             │
+   │ 4. age      K=4       │             │                             │
+   │                       │             │ facial / non-facial         │
+   │                       │             │   selects the prompt        │
+   │ one answer per TRACK  │             │ 5. one call per FRAME       │
+   │                       │             │    one answer per FRAME     │
+   └───────────┬───────────┘             └─────────────┬───────────────┘
                └───────────────────┬───────────────────┘
                                    ▼
                         6. merge → labels.json
@@ -249,6 +242,33 @@ corpus-wide, 158 of them (79%) in one session.**
 
 Only RAP v2 supports a generalisation claim. Any UPAR number is a training-set
 score and is labelled as such.
+
+### The 40 benchmark attributes, and where stage 0 sends them
+
+The shared schema between UPAR and RAP v2 is 40 binary attributes. Passing all
+40 through `pipeline/route_attributes.py` puts **every one of them on the
+identity branch**, and the model's stated reason is the same sentence each time:
+the attribute is a fixed property of the person rather than of the frame.
+
+| group | attributes | stated reason |
+|---|---|---|
+| age, gender (4) | Age-Young / Adult / Old, Gender-Female | "fixed property of the person" |
+| hair (3) | Hair-Length-Short / Long / Bald | "hair length is a fixed property" |
+| upper body (13) | UpperBody-Length-Short, Colour × 12 | "upper body colour is a fixed property" |
+| lower body (15) | LowerBody-Length-Short, Colour × 12, Type-Trousers&Shorts, Type-Skirt&Dress | "lower body ... fixed property" |
+| accessories (5) | Backpack, Bag, Glasses-Normal, Glasses-Sun, Hat | "fixed accessory of the person" |
+
+The `facial` question is not asked here: it only changes which exemplars a
+generated prompt is written from, and that applies to momentary attributes.
+
+This is the measured form of a claim made elsewhere in this report. The public
+benchmark carries **no attribute of the kind the momentary branch exists for**.
+Whether a face is visible, or whether the person is looking at the camera, is
+not in the 40; nor is anything else that can differ between two frames of the
+same track. A method compared only on this schema is never asked the question.
+
+The routing is cached in `out/attr_routing.json`, so each attribute is sent to
+the model once.
 
 ---
 

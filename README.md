@@ -9,6 +9,20 @@ source config/paths.sh
 bash run_all.sh --attrs "exposed watched gender age"
 ```
 
+The four attributes it ships with:
+
+| attribute | answer | how | measured |
+|---|---|---|---|
+| gender | one per **track** | Qwen3.5-9B + identity LoRA, K=4 frames per call | 0.9456 accuracy |
+| age | one per **track** | same adapter, separate integer prompt, K=4 | MAE 3.63 years |
+| exposed | one per **frame** | base 9B, `eyes` prompt, K=1 | F1 0.689 |
+| watched | one per **frame** | base 9B, `svfd` prompt, K=1 | F1 0.740 |
+
+Identity figures are on 349 held-out tracks; the age one is worth reading against
+the best single constant guess, which scores MAE 10.46. Momentary figures cover
+all 5,168 annotated instances. Full tables with confidence intervals are
+[below](#results).
+
 ---
 
 ## How the pipeline is shaped
@@ -26,8 +40,8 @@ property of the person, or a property of the frame?**
    ┌──────────────────────┐               ┌──────────────────────────┐
    │ 1. SAM 3 tracking    │               │  no tracking needed      │
    │ 2. fragments         │               │  boxes come straight     │
-   │ 3. gender  K=4 →1답  │               │  from the annotations    │
-   │ 4. age     K=4 →1답  │               │                          │
+   │ 3. gender   K=4      │               │  from the annotations    │
+   │ 4. age      K=4      │               │                          │
    │                      │               │  5. one call per FRAME   │
    │ one answer per TRACK │               │     one answer per FRAME │
    └──────────┬───────────┘               └────────────┬─────────────┘
@@ -37,10 +51,43 @@ property of the person, or a property of the frame?**
 ```
 
 **Identity attributes are tracked.** Tracking exists so that K frames of the same
-person can go into one call. That is worth doing: on the same 62 held-out tracks,
-grouping frames rather than labelling them one at a time gains **+0.045 to +0.113
-gender accuracy** and **0.76 to 2.48 years of age MAE**, across four different
-models.
+person can go into one call, and that is worth its cost. Same model, same 62
+held-out tracks, changing only how the frames are used:
+
+| model | frames used | gender | age MAE |
+|---|---|---|---|
+| base-4B | one at a time (K=1) | 0.8710 | 11.17 |
+| | per frame, then majority vote | 0.9194 | 9.74 |
+| | **K frames in one call** | **0.9839** | **8.69** |
+| base-9B, no fine-tune | one at a time | 0.8548 | 11.51 |
+| | per frame, then majority vote | 0.8871 | 9.45 |
+| | **K frames in one call** | **0.9516** | 9.71 |
+| 9B, fine-tuned single-image | one at a time | 0.8548 | 8.46 |
+| | per frame, then majority vote | 0.9032 | **6.65** |
+| | K frames in one call | 0.9000 | 7.70 |
+| 9B, fine-tuned multi-image | one at a time | 0.9032 | 7.12 |
+| | per frame, then majority vote | 0.9677 | 5.98 |
+| | **K frames in one call** | **0.9677** | **5.37** |
+
+Reading down each model:
+
+| model | gender | age MAE |
+|---|---|---|
+| base-4B | 0.8710 → 0.9839 (**+0.113**) | 11.17 → 8.69 (**−2.48**) |
+| base-9B, no fine-tune | 0.8548 → 0.9516 (**+0.097**) | 11.51 → 9.71 (**−1.80**) |
+| 9B, FT single-image | 0.8548 → 0.9000 (+0.045) | 8.46 → 7.70 (−0.76) |
+| 9B, FT multi-image | 0.9032 → 0.9677 (**+0.065**) | 7.12 → 5.37 (**−1.75**) |
+
+Three things follow. **Grouping beats voting** — majority vote over per-frame
+answers already removes noise, but handing K frames to the model at once is
+better in every row but one. **The gain is largest where the model is weakest**,
+so tracking partly substitutes for model capacity. And **the training format has
+to match**: the one row where grouping hurts age (6.65 → 7.70) is the model
+fine-tuned on *single* images, for which four frames are off-distribution. The
+shipped adapter was fine-tuned multi-image for that reason.
+
+These are 62 tracks from an earlier development set, so read the direction and
+size of the effect rather than the third decimal.
 
 **Momentary attributes are not tracked.** The answer is per frame, so knowing
 which frames belong to the same person buys nothing. Skipping stages 1–2 also
@@ -262,6 +309,8 @@ why this family is what stage 0 generates from for a new non-facial attribute.
 It also needs no crop and no track: a frame and its boxes are enough.
 
 ---
+
+<a id="results"></a>
 
 ## Results
 

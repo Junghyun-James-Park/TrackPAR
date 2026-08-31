@@ -4,12 +4,21 @@ Automatic person-attribute labelling for CCTV video. You give it an attribute;
 it works out how to label it, runs a vision-language model over your footage, and
 writes one label file.
 
+Two ways in:
+
 ```bash
 source config/paths.sh
+
+# label an attribute of your own, on images or video you already have
+bash label_attribute.sh --attr holding_item \
+    --definition "the person is holding a product in their hand" \
+    --images /data/my_frames
+
+# or reproduce the four attributes this was built and measured on
 bash run_all.sh --attrs "exposed watched gender age"
 ```
 
-The four attributes it ships with:
+The four it ships with, and what they scored:
 
 | attribute | answer | how | measured |
 |---|---|---|---|
@@ -23,8 +32,235 @@ the best single constant guess, which scores MAE 10.46. Momentary figures cover
 all 5,168 annotated instances. Full tables with confidence intervals are
 [below](#results).
 
-**Not restricted to those four.** To label an attribute of your own on your own
-data, see [Labelling a new attribute](#labelling-a-new-attribute).
+The pipeline is not restricted to those four: it decides how to label whatever
+attribute you hand it. [Labelling a new
+attribute](#labelling-a-new-attribute) is the section to read for that, and it
+needs none of the corpus, the adapter or SAM 3.
+
+---
+
+## How the pipeline is shaped
+
+Everything follows from one question asked once per attribute: **is this a
+property of the person, or a property of the frame?**
+
+```
+                    ┌─────────────────────────────┐
+   attribute ──────▶│ 0. route   (VLM, cached)    │
+                    └──────────────┬──────────────┘
+                      identity     │    momentary
+               ┌───────────────────┴───────────────────┐
+               ▼                                       ▼
+   ┌───────────────────────┐             ┌───────────────────────────┐
+   │ 1. SAM 3 tracking     │             │ no tracking: the boxes    │
+   │ 2. fragments          │             │ come straight from the    │
+   │ 3. gender   K=4       │             │ annotation file           │
+   │ 4. age      K=4       │             └─────────────┬─────────────┘
+   │                       │           facial          │       non-facial
+   │ one answer per TRACK  │              ┌────────────┴────────────┐
+   └───────────┬───────────┘              ▼                         ▼
+               │               ┌─────────────────────┐   ┌─────────────────────┐
+               │               │ crop of ONE person  │   │ full scene + boxes  │
+               │               │ eyes / svfd         │   │ PADQ template       │
+               │               └──────────┬──────────┘   └──────────┬──────────┘
+               │                          └────────────┬────────────┘
+               │                                       ▼
+               │                         5. one call per FRAME  (K=1)
+               │                             one answer per FRAME
+               │                                       │
+               └───────────────────┬───────────────────┘
+                                   ▼
+                        6. merge → labels.json
+```
+
+**Identity attributes are tracked.** Tracking exists so that K frames of the same
+person can go into one call, and that is worth its cost. Same model, same 62
+held-out tracks, changing only how the frames are used:
+
+| model | frames used | gender | age MAE |
+|---|---|---|---|
+| base-4B | one at a time (K=1) | 0.8710 | 11.17 |
+| | per frame, then majority vote | 0.9194 | 9.74 |
+| | **K frames in one call** | **0.9839** | **8.69** |
+| base-9B, no fine-tune | one at a time | 0.8548 | 11.51 |
+| | per frame, then majority vote | 0.8871 | 9.45 |
+| | **K frames in one call** | **0.9516** | 9.71 |
+| 9B, fine-tuned single-image | one at a time | 0.8548 | 8.46 |
+| | per frame, then majority vote | 0.9032 | **6.65** |
+| | K frames in one call | 0.9000 | 7.70 |
+| 9B, fine-tuned multi-image | one at a time | 0.9032 | 7.12 |
+| | per frame, then majority vote | 0.9677 | 5.98 |
+| | **K frames in one call** | **0.9677** | **5.37** |
+
+Reading down each model:
+
+| model | gender | age MAE |
+|---|---|---|
+| base-4B | 0.8710 → 0.9839 (**+0.113**) | 11.17 → 8.69 (**−2.48**) |
+| base-9B, no fine-tune | 0.8548 → 0.9516 (**+0.097**) | 11.51 → 9.71 (**−1.80**) |
+| 9B, FT single-image | 0.8548 → 0.9000 (+0.045) | 8.46 → 7.70 (−0.76) |
+| 9B, FT multi-image | 0.9032 → 0.9677 (**+0.065**) | 7.12 → 5.37 (**−1.75**) |
+
+Three things follow. **Grouping beats voting** — majority vote over per-frame
+answers already removes noise, but handing K frames to the model at once is
+better in every row but one. **The gain is largest where the model is weakest**,
+so tracking partly substitutes for model capacity. And **the training format has
+to match**: the one row where grouping hurts age (6.65 → 7.70) is the model
+fine-tuned on *single* images, for which four frames are off-distribution. The
+shipped adapter was fine-tuned multi-image for that reason.
+
+These are 62 tracks from an earlier development set, so read the direction and
+size of the effect rather than the third decimal.
+
+**Momentary attributes are not tracked.** The answer is per frame, so knowing
+which frames belong to the same person buys nothing. Skipping stages 1–2 also
+removes SAM 3 from the requirements — if you only want momentary attributes, you
+need neither the tracker nor its gated weights.
+
+**Stage 0 is cached.** An attribute is routed once and stored in
+`out/attr_routing.json`. Re-running never re-asks.
+
+### What stage 0 does with a new attribute
+
+```
+route ──▶ identity ──▶ K frames of one subject in a single call
+      │                  gender and age use the identity adapter;
+      │                  any other identity attribute runs on the base model
+      │
+      └─▶ momentary ──▶ is there a prompt written for this attribute?
+                          │
+                    yes ──┴──▶ reuse it        (config/prompt_registry.json)
+                     no  ─────▶ generate one, from exemplars
+                                  facial     → eyes, svfd, combined
+                                  non-facial → the PADQ template
+```
+
+Whether an existing prompt is reused comes from an explicit table, not a model
+judgement. Two of the four shipped attributes have prompts written specifically
+for them; anything else goes to generation.
+
+All of this is what [`label_attribute.sh`](#labelling-a-new-attribute) runs for
+you, and that is the normal way in. The stages are also separately callable,
+which is useful for inspecting a routing decision before committing to a run:
+
+```bash
+# route an attribute, or several
+python pipeline/route_attributes.py --attrs "holding_item: the person is holding a product"
+
+# see what has been routed so far (no GPU, no model)
+python pipeline/route_attributes.py --show
+```
+
+There is also `pipeline/make_prompt.py`, which writes a prompt and stops there.
+It predates `label_attribute.py` and leaves the harder half undone: the prompt it
+writes names its own output field, and the deployment parsers read the two fixed
+names `exposed` and `watched`, so an attribute under any other name parses
+cleanly and comes back empty. Use it to look at what a generated prompt contains;
+use `label_attribute.sh` to actually label something.
+
+---
+
+## Setup
+
+Two conda environments, because SAM 3 and the VLM stack disagree on
+`transformers`: SAM 3 needs 5.8.x, the VLM side is pinned to 5.3.0. **You only
+need the second one unless you are labelling identity attributes.**
+
+```bash
+git clone https://github.com/Junghyun-James-Park/TrackPAR.git
+cd TrackPAR
+
+conda create -n trackpar python=3.11 -y
+conda activate trackpar
+pip install -r requirements.txt
+
+source config/paths.sh
+```
+
+That is the whole of it for labelling your own data. The three sections below
+are for reproducing the shipped results, and each says what it needs:
+
+| | needed for |
+|---|---|
+| the corpus | reproducing the numbers in [Results](#results) |
+| the identity adapter | `gender` and `age` only |
+| SAM 3 | building tracks from raw video |
+
+None of the three is required by
+[Labelling a new attribute](#labelling-a-new-attribute), which runs on the base
+model over images you already have.
+
+### The corpus
+
+Frames plus per-frame person boxes. Not redistributable here.
+
+```bash
+$EDITOR config/paths.sh
+```
+```
+LOTTE_IMAGES   frames, one directory per recording session
+LOTTE_ANNOT    per-frame person instances (JSON) — this is where boxes come from
+LOTTE_CSV      ground truth; only needed to SCORE, never to label
+```
+
+### The identity adapter — 1.2 GB
+
+Needed for `gender` and `age`. Momentary attributes run on the base model.
+
+```bash
+pip install gdown
+bash setup/fetch_weights.sh --gdrive \
+  https://drive.google.com/file/d/1uPuaeyGZKUWyHm7AHU21E4LRdcHYnsrT/view?usp=sharing
+```
+
+The script unpacks it and prints the sha256 of both weight files. Check them:
+
+| file | size | sha256 |
+|---|---|---|
+| `adapter_model.safetensors` | 330.3 MB | `63dc9e9ec6df2b4ee100f84e3c5cdcbaef21952efc65d649c4e526cefb8af5c0` |
+| `non_lora_state_dict.bin` | 869.9 MB | `408e9eeb88df3985532cac345cd4970e0f700e785ba140c9df7cde1eec562ad3` |
+
+A truncated download is otherwise indistinguishable from a complete one.
+
+> **Both files matter.** `PeftModel.from_pretrained` loads
+> `adapter_model.safetensors` and **silently ignores** `non_lora_state_dict.bin`,
+> which holds the trained vision tower and merger. Nothing raises. A copy missing
+> the second file evaluates a base vision tower underneath a fine-tuned adapter —
+> a model that never existed — and it scores plausibly enough to look correct.
+> `setup/check_env.py` refuses to run without it.
+
+Without the adapter, unset `IDENTITY_ADAPTER` to run identity on the base model.
+The pipeline still works; the numbers drop.
+
+### SAM 3 — only for identity attributes
+
+Public, but the weights are gated.
+
+```bash
+git clone https://github.com/facebookresearch/sam3
+conda create -n sam3 python=3.12 -y && conda activate sam3
+pip install -r requirements-sam3.txt
+pip install -e /path/to/sam3
+
+huggingface-cli login     # after accepting the terms at
+                          # https://huggingface.co/facebook/sam3
+```
+
+Then point `SAM3_ENV` and `SAM3_SRC` in `config/paths.sh` at them. If you already
+have tracks, or only want momentary attributes, skip all of this.
+
+### Check before running
+
+```bash
+conda activate trackpar
+source config/paths.sh
+python setup/check_env.py
+```
+
+Twelve checks. Each one corresponds to a mistake that cost GPU time here — an
+unwritable `HF_HOME` that reads like a HuggingFace outage, a missing
+`non_lora_state_dict.bin`, a pipeline module that only fails once the run reaches
+it.
 
 ---
 
@@ -155,207 +391,7 @@ came from.
 
 ---
 
-## How the pipeline is shaped
-
-Everything follows from one question asked once per attribute: **is this a
-property of the person, or a property of the frame?**
-
-```
-                    ┌─────────────────────────────┐
-   attribute ──────▶│ 0. route   (VLM, cached)    │
-                    └──────────────┬──────────────┘
-                      identity     │    momentary
-               ┌───────────────────┴───────────────────┐
-               ▼                                       ▼
-   ┌───────────────────────┐             ┌───────────────────────────┐
-   │ 1. SAM 3 tracking     │             │ no tracking: the boxes    │
-   │ 2. fragments          │             │ come straight from the    │
-   │ 3. gender   K=4       │             │ annotation file           │
-   │ 4. age      K=4       │             └─────────────┬─────────────┘
-   │                       │           facial          │       non-facial
-   │ one answer per TRACK  │              ┌────────────┴────────────┐
-   └───────────┬───────────┘              ▼                         ▼
-               │               ┌─────────────────────┐   ┌─────────────────────┐
-               │               │ crop of ONE person  │   │ full scene + boxes  │
-               │               │ eyes / svfd         │   │ PADQ template       │
-               │               └──────────┬──────────┘   └──────────┬──────────┘
-               │                          └────────────┬────────────┘
-               │                                       ▼
-               │                         5. one call per FRAME  (K=1)
-               │                             one answer per FRAME
-               │                                       │
-               └───────────────────┬───────────────────┘
-                                   ▼
-                        6. merge → labels.json
-```
-
-**Identity attributes are tracked.** Tracking exists so that K frames of the same
-person can go into one call, and that is worth its cost. Same model, same 62
-held-out tracks, changing only how the frames are used:
-
-| model | frames used | gender | age MAE |
-|---|---|---|---|
-| base-4B | one at a time (K=1) | 0.8710 | 11.17 |
-| | per frame, then majority vote | 0.9194 | 9.74 |
-| | **K frames in one call** | **0.9839** | **8.69** |
-| base-9B, no fine-tune | one at a time | 0.8548 | 11.51 |
-| | per frame, then majority vote | 0.8871 | 9.45 |
-| | **K frames in one call** | **0.9516** | 9.71 |
-| 9B, fine-tuned single-image | one at a time | 0.8548 | 8.46 |
-| | per frame, then majority vote | 0.9032 | **6.65** |
-| | K frames in one call | 0.9000 | 7.70 |
-| 9B, fine-tuned multi-image | one at a time | 0.9032 | 7.12 |
-| | per frame, then majority vote | 0.9677 | 5.98 |
-| | **K frames in one call** | **0.9677** | **5.37** |
-
-Reading down each model:
-
-| model | gender | age MAE |
-|---|---|---|
-| base-4B | 0.8710 → 0.9839 (**+0.113**) | 11.17 → 8.69 (**−2.48**) |
-| base-9B, no fine-tune | 0.8548 → 0.9516 (**+0.097**) | 11.51 → 9.71 (**−1.80**) |
-| 9B, FT single-image | 0.8548 → 0.9000 (+0.045) | 8.46 → 7.70 (−0.76) |
-| 9B, FT multi-image | 0.9032 → 0.9677 (**+0.065**) | 7.12 → 5.37 (**−1.75**) |
-
-Three things follow. **Grouping beats voting** — majority vote over per-frame
-answers already removes noise, but handing K frames to the model at once is
-better in every row but one. **The gain is largest where the model is weakest**,
-so tracking partly substitutes for model capacity. And **the training format has
-to match**: the one row where grouping hurts age (6.65 → 7.70) is the model
-fine-tuned on *single* images, for which four frames are off-distribution. The
-shipped adapter was fine-tuned multi-image for that reason.
-
-These are 62 tracks from an earlier development set, so read the direction and
-size of the effect rather than the third decimal.
-
-**Momentary attributes are not tracked.** The answer is per frame, so knowing
-which frames belong to the same person buys nothing. Skipping stages 1–2 also
-removes SAM 3 from the requirements — if you only want momentary attributes, you
-need neither the tracker nor its gated weights.
-
-**Stage 0 is cached.** An attribute is routed once and stored in
-`out/attr_routing.json`. Re-running never re-asks.
-
-### What stage 0 does with a new attribute
-
-```
-route ──▶ identity ──▶ identity adapter, K=4
-      │
-      └─▶ momentary ──▶ is there a prompt written for this attribute?
-                          │
-                    yes ──┴──▶ reuse it        (config/prompt_registry.json)
-                     no  ─────▶ generate one   (pipeline/make_prompt.py)
-                                  facial     → exemplars: eyes, svfd, combined
-                                  non-facial → exemplars: the PADQ template
-```
-
-Whether an existing prompt is reused comes from an explicit table, not a model
-judgement. Two of the four shipped attributes have prompts written specifically
-for them; anything else goes to generation.
-
-```bash
-# route a new attribute
-python pipeline/route_attributes.py --attrs "holding_item: the person is holding a product"
-
-# see what has been routed so far (no GPU)
-python pipeline/route_attributes.py --show
-
-# write a prompt for it
-python pipeline/make_prompt.py --attr holding_item
-```
-
----
-
-## Setup
-
-Two conda environments, because SAM 3 and the VLM stack disagree on
-`transformers`: SAM 3 needs 5.8.x, the VLM side is pinned to 5.3.0. **You only
-need the second one unless you are labelling identity attributes.**
-
-```bash
-git clone https://github.com/Junghyun-James-Park/TrackPAR.git
-cd TrackPAR
-
-conda create -n trackpar python=3.11 -y
-conda activate trackpar
-pip install -r requirements.txt
-```
-
-### The corpus
-
-Frames plus per-frame person boxes. Not redistributable here.
-
-```bash
-$EDITOR config/paths.sh
-```
-```
-LOTTE_IMAGES   frames, one directory per recording session
-LOTTE_ANNOT    per-frame person instances (JSON) — this is where boxes come from
-LOTTE_CSV      ground truth; only needed to SCORE, never to label
-```
-
-### The identity adapter — 1.2 GB
-
-Needed for `gender` and `age`. Momentary attributes run on the base model.
-
-```bash
-pip install gdown
-bash setup/fetch_weights.sh --gdrive \
-  https://drive.google.com/file/d/1uPuaeyGZKUWyHm7AHU21E4LRdcHYnsrT/view?usp=sharing
-```
-
-The script unpacks it and prints the sha256 of both weight files. Check them:
-
-| file | size | sha256 |
-|---|---|---|
-| `adapter_model.safetensors` | 330.3 MB | `63dc9e9ec6df2b4ee100f84e3c5cdcbaef21952efc65d649c4e526cefb8af5c0` |
-| `non_lora_state_dict.bin` | 869.9 MB | `408e9eeb88df3985532cac345cd4970e0f700e785ba140c9df7cde1eec562ad3` |
-
-A truncated download is otherwise indistinguishable from a complete one.
-
-> **Both files matter.** `PeftModel.from_pretrained` loads
-> `adapter_model.safetensors` and **silently ignores** `non_lora_state_dict.bin`,
-> which holds the trained vision tower and merger. Nothing raises. A copy missing
-> the second file evaluates a base vision tower underneath a fine-tuned adapter —
-> a model that never existed — and it scores plausibly enough to look correct.
-> `setup/check_env.py` refuses to run without it.
-
-Without the adapter, unset `IDENTITY_ADAPTER` to run identity on the base model.
-The pipeline still works; the numbers drop.
-
-### SAM 3 — only for identity attributes
-
-Public, but the weights are gated.
-
-```bash
-git clone https://github.com/facebookresearch/sam3
-conda create -n sam3 python=3.12 -y && conda activate sam3
-pip install -r requirements-sam3.txt
-pip install -e /path/to/sam3
-
-huggingface-cli login     # after accepting the terms at
-                          # https://huggingface.co/facebook/sam3
-```
-
-Then point `SAM3_ENV` and `SAM3_SRC` in `config/paths.sh` at them. If you already
-have tracks, or only want momentary attributes, skip all of this.
-
-### Check before running
-
-```bash
-conda activate trackpar
-source config/paths.sh
-python setup/check_env.py
-```
-
-Twelve checks. Each one corresponds to a mistake that cost GPU time here — an
-unwritable `HF_HOME` that reads like a HuggingFace outage, a missing
-`non_lora_state_dict.bin`, a pipeline module that only fails once the run reaches
-it.
-
----
-
-## Running
+## Running the shipped pipeline
 
 ```bash
 source config/paths.sh

@@ -38,23 +38,49 @@ once and never again.
 
 ### Stage 0, and why it is trusted
 
-The router was validated before being wired in. It was given three sets at once:
+The question the router asks was rewritten twice, and each rewrite was measured
+against the one before it on three fixed checks. The anchors are `exposed` and
+`watched`, which must stay momentary, and `gender` and `age`, which must stay
+identity; a prompt that moves any of them is rejected whatever else it fixes.
 
-| set | what it is | result |
-|---|---|---|
-| the four shipped attributes | routing already decided by hand | **4/4 matched** |
-| five non-facial momentary candidates | pushing a cart, holding an item, bending down, hand in pocket, talking | separated correctly; `talking` called facial, on the grounds of mouth movement |
-| the 40 benchmark attributes | UPAR/RAP v2 | **40/40 identity**, none momentary |
+| check | original | + deployment window | + action carve-out |
+|---|---|---|---|
+| 20 boundary cases, agreement with the intended routing | 12/20 | 17/20 | **20/20** |
+| RAP v2's 9 action attributes, routed momentary | 9/9 | **0/9** | 9/9 |
+| the 40 benchmark attributes, routed identity | 40/40 | 40/40 | 40/40 |
 
-The last row is the measured form of a claim made later in this report: the
+**The original prompt asked the question in the abstract, and got an abstract
+answer.** It routed clothing colour, both kinds of glasses, hat, bag and
+backpack to momentary: all of them can change, in principle. It also answered
+differently depending on what else was in the batch — the same five accessories
+came back identity when listed beside other appearance attributes and momentary
+when listed beside actions.
+
+**The deployment window fixed that and over-corrected.** Telling the router that
+the camera is fixed and a shopper crosses it in seconds moved the accessories to
+identity, and moved every action attribute there too, because "when unsure,
+choose identity" swallows verbs.
+
+**The carve-out separates a state from an action.** Wearing or having something
+is a state the person arrived with, so it is identity; carrying, holding,
+pushing, talking are actions, so they are momentary. That split is not a
+stylistic preference — the two mistakes cost differently. A stable attribute
+called momentary costs extra model calls and nothing else, because the per-frame
+answers agree and collapse back into one by majority vote. A changing attribute
+called identity was never observed per frame, so if the value did move there is
+a single answer for the whole track, it is wrong for part of it, and nothing in
+the output records that it is wrong.
+
+The third row is the measured form of a claim made later in this report: the
 public benchmark contains no attribute of the kind the momentary route exists
 for.
 
-One caveat worth recording. Five attributes sit on the boundary — hat, bag,
-backpack, and both kinds of glasses. A differently worded probe called those
-"changes during a track"; this one calls them identity. Both readings are
-defensible (few shoppers remove a hat during a visit), but it means the router's
-answer on removable accessories depends on how the question is asked.
+What has **not** been established is that any of these routings is correct.
+There is no ground truth for the question. RAP v2 cannot supply one: its
+`person_identity` field groups a person across days, so clothing changes within
+a group, and the 79 real tracks recoverable from the filenames carry enough
+annotation noise that `Age31-45` varies within 59.5% of them. The three checks
+above measure agreement with a hand-written intent, not accuracy.
 
 ### After routing: which prompt
 

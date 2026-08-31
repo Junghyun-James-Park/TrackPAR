@@ -21,8 +21,26 @@ general, the same object routes two ways depending on what it is called:
 answer also moved with the batch — the accessories routed identity when listed
 beside other appearance attributes and momentary when listed beside actions.
 Naming the window (a fixed camera, a person crossing it in seconds) fixed eight
-of twenty boundary cases and broke none, and left `exposed` and `watched`
-momentary, which is the constraint that keeps the rule honest.
+of twenty boundary cases and broke none. It then over-corrected: every one of
+RAP v2's nine action attributes came back identity, because "when unsure, choose
+identity" swallows verbs too.
+
+The carve-out below fixes that, and it is there because the two mistakes do not
+cost the same. A stable attribute called momentary costs extra calls and nothing
+else — the per-frame answers agree and collapse back by majority vote. A
+changing attribute called identity was never observed per frame, so if the value
+did move there is one answer for the whole track, it is wrong for part of it,
+and nothing records that. So states the person arrived with default to identity
+and actions they are performing default to momentary.
+
+Measured on three checks, with the anchors (exposed, watched momentary; gender,
+age identity) holding throughout:
+
+    boundary cases   original 12/20   window 17/20   window+verb  20/20
+    RAP v2 actions   momentary 9/9    0/9            9/9
+    UPAR 40 (all appearance)   identity 40/40 for all three
+
+`window+verb` is the only version that passes all three.
 
 Results are cached in out/attr_routing.json. An attribute already routed is not
 sent to the model again, so re-running is free and the routing of a given
@@ -65,9 +83,22 @@ Q1 "kind":
                   which way the head is turned, where they are looking, whether
                   a shelf is in the way. Each frame then needs its own answer.
 
-When unsure, choose "identity". A momentary attribute costs one model call per
-frame and cannot use the track; treating a stable attribute as momentary throws
-that away for nothing.
+One case is decided the other way. If the attribute names an ACTION the person
+is PERFORMING — carrying, holding, pushing, pulling, talking, calling, reaching,
+bending — answer "momentary", even when you think the action probably lasts.
+A verb describes a moment. Note that WEARING or HAVING something is a state, not
+an action: a backpack on someone's back, a hat on their head or a bag on their
+shoulder is identity, because they arrived with it.
+
+The two mistakes do not cost the same, which is why the default splits that way.
+Labelling a stable attribute "momentary" costs extra model calls and nothing
+else: the per-frame answers agree, and one answer per track can be recovered
+from them afterwards. Labelling a changing attribute "identity" cannot be undone
+— the value was never observed per frame, so if it did change there is one
+answer for the whole track, it is wrong for part of it, and nothing records that.
+
+So: when unsure about a STATE the person arrived with, choose "identity". When
+unsure about an ACTION they are performing, choose "momentary".
 
 Q2 "facial" — answer only when kind is "momentary", otherwise "n/a". Is the
    attribute decided by looking at the person's FACE, HEAD ORIENTATION or GAZE?

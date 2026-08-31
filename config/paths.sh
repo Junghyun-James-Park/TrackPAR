@@ -36,6 +36,12 @@ fi
 
 # --- models ---------------------------------------------------------------
 export BASE_MODEL="${BASE_MODEL:-Qwen/Qwen3.5-9B}"
+# The model that WRITES a prompt for an attribute that does not have one. Bigger
+# than the one that labels, on purpose: it runs a handful of times per attribute,
+# and what it writes is then read on every one of thousands of calls. Stage 0
+# routing stays on BASE_MODEL — that is a two-way question, and 9B answers it.
+# Set this to $BASE_MODEL to use one model for everything.
+export PROMPT_MODEL="${PROMPT_MODEL:-Qwen/Qwen3.5-27B}"
 # Identity LoRA adapter (gender + age). ~1.2 GB, fetched rather than committed;
 # see setup/fetch_weights.sh. Leave empty to run identity on the base model.
 export IDENTITY_ADAPTER="${IDENTITY_ADAPTER:-$TRACKPAR_ROOT/weights/identity_lora}"

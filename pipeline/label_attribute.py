@@ -276,8 +276,17 @@ def identity_body(attr, definition):
 
 
 # ------------------------------------------------------------------ stage 1
-def get_prompt(attr, definition, routing, model, proc, force_regen=False):
-    """Reuse a measured prompt, or write one. Returns (text, source)."""
+def get_prompt(attr, definition, routing, model, proc, force_regen=False,
+               prompt_model=None):
+    """Reuse a measured prompt, or write one. Returns (text, source).
+
+    Writing a prompt is done by `prompt_model`, which defaults to a larger model
+    than the one that labels. Routing asks a two-way question and 9B answers it;
+    a prompt is read on every one of thousands of calls afterwards, so the cost
+    of a bigger model is paid once and its effect is not once. The generator is
+    loaded only when there is something to generate, and freed straight after,
+    so the labelling model does not have to share the cards with it.
+    """
     reg = json.load(open(REGISTRY))
     known = reg.get("momentary", {}).get(attr)
     if known and known.get("prompt") and not force_regen:
@@ -327,18 +336,29 @@ def get_prompt(attr, definition, routing, model, proc, force_regen=False):
               "reasoning, commentary or headings outside those tags.")
     full = "\n\n".join(exemplars) + "\n\n" + instr
 
+    gen_id = prompt_model or os.environ.get("PROMPT_MODEL") or None
+    gproc, gmodel, borrowed = proc, model, True
+    if gen_id and gen_id != os.environ.get("BASE_MODEL", "Qwen/Qwen3.5-9B"):
+        from transformers import AutoModelForImageTextToText, AutoProcessor
+        print(f"  loading the prompt writer: {gen_id}", flush=True)
+        gproc = AutoProcessor.from_pretrained(gen_id)
+        gmodel = AutoModelForImageTextToText.from_pretrained(
+            gen_id, dtype=torch.bfloat16, attn_implementation="sdpa",
+            device_map="auto").eval()
+        borrowed = False
+
     print(f"  generating a prompt ({kind}, {len(exemplars)} exemplars)", flush=True)
     body = ""
     for attempt in (1, 2):
         msg = [{"role": "user", "content": [{"type": "text", "text": full}]}]
-        s = proc.apply_chat_template(msg, tokenize=False,
-                                     add_generation_prompt=True,
-                                     enable_thinking=False)
-        inp = proc(text=[s], return_tensors="pt").to(model.device)
+        s = gproc.apply_chat_template(msg, tokenize=False,
+                                      add_generation_prompt=True,
+                                      enable_thinking=False)
+        inp = gproc(text=[s], return_tensors="pt").to(gmodel.device)
         with torch.no_grad():
-            o = model.generate(**inp, max_new_tokens=900, do_sample=False)
-        out = proc.decode(o[0][inp["input_ids"].shape[1]:],
-                          skip_special_tokens=True).strip()
+            o = gmodel.generate(**inp, max_new_tokens=900, do_sample=False)
+        out = gproc.decode(o[0][inp["input_ids"].shape[1]:],
+                           skip_special_tokens=True).strip()
         body = strip_output_spec(extract_prompt_body(out), attr)
         bad = prompt_body_problems(body, attr)
         if not bad:
@@ -346,6 +366,11 @@ def get_prompt(attr, definition, routing, model, proc, force_regen=False):
         print(f"  attempt {attempt}: {bad}")
         full += ("\n\nYour previous answer was not usable: " + bad +
                  " Return only the prompt, inside <PROMPT></PROMPT>.")
+
+    if not borrowed:
+        # Free it before the labelling model needs the cards.
+        del gmodel, gproc
+        torch.cuda.empty_cache()
 
     if prompt_body_problems(body, attr):
         print("  generation did not produce a usable prompt; falling back to a "
@@ -506,7 +531,14 @@ def main():
                     help="process at most N units (0 = all). Applied after a "
                          "stable sort, so the same N are chosen every run")
     ap.add_argument("--model-id", default=os.environ.get("BASE_MODEL",
-                                                         "Qwen/Qwen3.5-9B"))
+                                                         "Qwen/Qwen3.5-9B"),
+                    help="the model that labels, and that stage 0 routes with")
+    ap.add_argument("--prompt-model",
+                    default=os.environ.get("PROMPT_MODEL", "Qwen/Qwen3.5-27B"),
+                    help="the model that WRITES a prompt when one has to be "
+                         "generated. Larger by default: it runs a handful of "
+                         "times, and what it writes is read on every call after. "
+                         "Set it to --model-id to use one model for everything")
     ap.add_argument("--adapter", default=None,
                     help="identity LoRA. The shipped adapter was trained for "
                          "gender and age only; leave unset for a new attribute")
@@ -596,7 +628,7 @@ def main():
 
     print("\n[2/3] prompt")
     prompt, src = get_prompt(a.attr, a.definition, routing, model, proc,
-                             a.regenerate)
+                             a.regenerate, a.prompt_model)
     registry_path = src == "registry"
     if registry_path and a.attr in ("exposed", "watched"):
         print("  This attribute has a measured prompt, so the run below uses "

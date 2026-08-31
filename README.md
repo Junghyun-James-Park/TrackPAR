@@ -418,6 +418,14 @@ prints that it did.
 Prompts land in `prompts/generated/<attr>.txt`. Edit one and re-run; it is reused
 unless you pass `--regenerate`.
 
+**A different model writes the prompt.** `PROMPT_MODEL` in `config/paths.sh`
+defaults to `Qwen/Qwen3.5-27B` while labelling and routing stay on
+`BASE_MODEL`. Routing asks a two-way question that 9B answers; a prompt is read
+on every one of thousands of calls afterwards, so it is worth more there. The
+writer is loaded only when there is something to generate and freed straight
+after, so the two never share the cards. Set `PROMPT_MODEL=$BASE_MODEL` to use
+one model for everything.
+
 ### Attribute names to avoid
 
 `eyes`, `nose`, `mouth`, `gaze`, `frames`, `gender`, `age`, `bbox_2d` are field

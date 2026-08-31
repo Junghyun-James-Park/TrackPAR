@@ -135,17 +135,27 @@ fi
 # One call per FRAME, K=1. The prompt comes from config/prompt_registry.json when
 # the attribute has one written for it; otherwise pipeline/make_prompt.py writes
 # one from exemplars first.
+#
+# The prompt and the parser are chosen together. STYLE selects the parser: for
+# `meta` the prompt text comes from a file, for a built-in style (svfd, plain,
+# trueonly, padq) the runner builds it and reads its own schema back. Passing a
+# prompt file to the wrong style still produces valid JSON, so nothing downstream
+# would notice — hence the pairing lives here rather than being inferred.
+prompt_args() {   # $1 style, $2 prompt file -> sets PROMPT_ARGS
+  if [ "$1" = "meta" ]; then PROMPT_ARGS=(--prompt meta --prompt_file "$2")
+  else PROMPT_ARGS=(--prompt "$1"); fi
+}
+
 if want momentary; then
   if ! ls "$TRACKPAR_OUT"/momentary_exposed*.json >/dev/null 2>&1; then
-    say "5a/6 exposed — $(basename "$EXPOSED_PROMPT") @ K=1, per frame"
+    prompt_args "$EXPOSED_STYLE" "$EXPOSED_PROMPT"; EX_ARGS=("${PROMPT_ARGS[@]}")
+    say "5a/6 exposed — $(basename "$EXPOSED_PROMPT") / $EXPOSED_STYLE @ K=$EXPOSED_K, per frame"
     CUDA_VISIBLE_DEVICES="$G0" python -u "$ROOT/pipeline/momentary_k1_control.py" \
-        --prompt meta --prompt_file "$EXPOSED_PROMPT" --all-tracks \
-        --shard-idx 0 --n-shards 2 \
+        "${EX_ARGS[@]}" --all-tracks --shard-idx 0 --n-shards 2 \
         --out "$TRACKPAR_OUT/momentary_exposed_sh0.json" &
     P0=$!
     CUDA_VISIBLE_DEVICES="$G1" python -u "$ROOT/pipeline/momentary_k1_control.py" \
-        --prompt meta --prompt_file "$EXPOSED_PROMPT" --all-tracks \
-        --shard-idx 1 --n-shards 2 \
+        "${EX_ARGS[@]}" --all-tracks --shard-idx 1 --n-shards 2 \
         --out "$TRACKPAR_OUT/momentary_exposed_sh1.json" &
     P1=$!
     wait $P0 $P1
@@ -155,13 +165,14 @@ if want momentary; then
 
   if ! ls "$TRACKPAR_OUT"/momentary_watched*.json >/dev/null 2>&1; then
     # ~4.4 s per frame, ~9,500 frames, about 6 h across two cards per attribute.
-    say "5b/6 watched — $(basename "$WATCHED_PROMPT") @ K=$WATCHED_K, per frame"
+    prompt_args "$WATCHED_STYLE" "$WATCHED_PROMPT"; WA_ARGS=("${PROMPT_ARGS[@]}")
+    say "5b/6 watched — $(basename "$WATCHED_PROMPT") / $WATCHED_STYLE @ K=$WATCHED_K, per frame"
     CUDA_VISIBLE_DEVICES="$G0" python -u "$ROOT/pipeline/momentary_k1_control.py" \
-        --prompt svfd --all-tracks --shard-idx 0 --n-shards 2 \
+        "${WA_ARGS[@]}" --all-tracks --shard-idx 0 --n-shards 2 \
         --out "$TRACKPAR_OUT/momentary_watched_sh0.json" &
     P0=$!
     CUDA_VISIBLE_DEVICES="$G1" python -u "$ROOT/pipeline/momentary_k1_control.py" \
-        --prompt svfd --all-tracks --shard-idx 1 --n-shards 2 \
+        "${WA_ARGS[@]}" --all-tracks --shard-idx 1 --n-shards 2 \
         --out "$TRACKPAR_OUT/momentary_watched_sh1.json" &
     P1=$!
     wait $P0 $P1

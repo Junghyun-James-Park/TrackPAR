@@ -48,15 +48,29 @@ export SAM3_ENV="${SAM3_ENV:-sam3}"
 export SAM3_SRC="${SAM3_SRC:-/path/to/sam3}"
 
 # --- which momentary setting ships ---------------------------------------
-# Both matter, and K is easy to overlook: on the same frames the same prompt
-# moves by up to 0.667 watched F1 between K=8 and K=1. See docs/RESULTS.md.
+# Momentary attributes run at K=1, one call per frame, with no tracking. K is
+# easy to overlook and it is not a small knob: on the same frames the same
+# prompt moves by up to 0.667 watched F1 between K=8 and K=1. docs/RESULTS.md
+# has the grid; run_all.sh explains why the tracker is skipped here.
 #
-# exposed uses `eyes`, not `combined`. combined leads at K=1 (0.674 vs 0.714)
-# but collapses at K=8 (0.540 vs 0.728), and K=8 is what this stage runs.
-# Picking by the K=1 table would have shipped the weaker arm.
+# exposed uses `eyes`. On the full 5,168-instance grid it scores 0.689
+# [0.670, 0.708], inside the leading tie group along with combined (0.697),
+# subattr and PADQ. combined is nominally 0.008 ahead, which sits well inside
+# its own interval, and its three-field schema does no work: 99% of its answers
+# set eyes, nose and mouth to the same value. Same score, simpler prompt.
+#
+# watched uses `svfd` at 0.740 [0.689, 0.784], separated from every other arm.
+# This is the one place where the prompt choice is unambiguous.
+#
+# STYLE picks the PARSER and has to match the prompt. `meta` reads the
+# observation fields (eyes / nose / mouth / gaze) that the crop prompts emit;
+# `svfd` reads svfd's own schema. Changing PROMPT without changing STYLE hands
+# the answer to the wrong reader, and the result still parses as valid JSON.
 export EXPOSED_PROMPT="${EXPOSED_PROMPT:-$TRACKPAR_ROOT/prompts/crop/eyes.txt}"
-export EXPOSED_K="${EXPOSED_K:-8}"
+export EXPOSED_STYLE="${EXPOSED_STYLE:-meta}"
+export EXPOSED_K="${EXPOSED_K:-1}"
 export WATCHED_PROMPT="${WATCHED_PROMPT:-$TRACKPAR_ROOT/prompts/crop/svfd.txt}"
+export WATCHED_STYLE="${WATCHED_STYLE:-svfd}"
 export WATCHED_K="${WATCHED_K:-1}"
 
 # --- GPUs -----------------------------------------------------------------

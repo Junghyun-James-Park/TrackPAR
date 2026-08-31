@@ -12,22 +12,31 @@ Seven stages, and which of them run depends on the attribute. Stage 0 asks the
 model one question and everything else follows from the answer.
 
 ```
-                    ┌──────────────────────────────┐
-   attribute  ─────▶│  0. route  (VLM, cached)     │
-                    └──────────────┬───────────────┘
-                       identity    │    momentary
-              ┌────────────────────┴────────────────────┐
-              ▼                                         ▼
-   ┌──────────────────────┐               ┌──────────────────────────┐
-   │ 1. SAM 3 tracking    │               │  no tracking             │
-   │ 2. fragments         │               │  boxes come from the     │
-   │ 3. gender  K=4       │               │  annotation file         │
-   │ 4. age     K=4       │               │                          │
-   │                      │               │  5. one call per FRAME   │
-   │ one answer per TRACK │               │     one answer per FRAME │
-   └──────────┬───────────┘               └────────────┬─────────────┘
-              └──────────────────┬─────────────────────┘
-                                 ▼
+                    ┌─────────────────────────────┐
+   attribute ──────▶│ 0. route   (VLM, cached)    │
+                    └──────────────┬──────────────┘
+                      identity     │    momentary
+               ┌───────────────────┴───────────────────┐
+               ▼                                       ▼
+   ┌───────────────────────┐             ┌───────────────────────────┐
+   │ 1. SAM 3 tracking     │             │ no tracking: the boxes    │
+   │ 2. fragments          │             │ come straight from the    │
+   │ 3. gender   K=4       │             │ annotation file           │
+   │ 4. age      K=4       │             └─────────────┬─────────────┘
+   │                       │           facial          │       non-facial
+   │ one answer per TRACK  │              ┌────────────┴────────────┐
+   └───────────┬───────────┘              ▼                         ▼
+               │               ┌─────────────────────┐   ┌─────────────────────┐
+               │               │ crop of ONE person  │   │ full scene + boxes  │
+               │               │ eyes / svfd         │   │ PADQ template       │
+               │               └──────────┬──────────┘   └──────────┬──────────┘
+               │                          └────────────┬────────────┘
+               │                                       ▼
+               │                         5. one call per FRAME  (K=1)
+               │                             one answer per FRAME
+               │                                       │
+               └───────────────────┬───────────────────┘
+                                   ▼
                         6. merge → labels.json
 ```
 

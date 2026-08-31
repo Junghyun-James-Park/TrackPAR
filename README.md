@@ -31,22 +31,31 @@ Everything follows from one question asked once per attribute: **is this a
 property of the person, or a property of the frame?**
 
 ```
-                    ┌──────────────────────────────┐
-   attribute  ─────▶│  0. route  (VLM, cached)     │
-                    └──────────────┬───────────────┘
-                       identity    │    momentary
-              ┌────────────────────┴────────────────────┐
-              ▼                                         ▼
-   ┌──────────────────────┐               ┌──────────────────────────┐
-   │ 1. SAM 3 tracking    │               │  no tracking needed      │
-   │ 2. fragments         │               │  boxes come straight     │
-   │ 3. gender   K=4      │               │  from the annotations    │
-   │ 4. age      K=4      │               │                          │
-   │                      │               │  5. one call per FRAME   │
-   │ one answer per TRACK │               │     one answer per FRAME │
-   └──────────┬───────────┘               └────────────┬─────────────┘
-              └──────────────────┬─────────────────────┘
-                                 ▼
+                    ┌─────────────────────────────┐
+   attribute ──────▶│ 0. route   (VLM, cached)    │
+                    └──────────────┬──────────────┘
+                      identity     │    momentary
+               ┌───────────────────┴───────────────────┐
+               ▼                                       ▼
+   ┌───────────────────────┐             ┌───────────────────────────┐
+   │ 1. SAM 3 tracking     │             │ no tracking: the boxes    │
+   │ 2. fragments          │             │ come straight from the    │
+   │ 3. gender   K=4       │             │ annotation file           │
+   │ 4. age      K=4       │             └─────────────┬─────────────┘
+   │                       │           facial          │       non-facial
+   │ one answer per TRACK  │              ┌────────────┴────────────┐
+   └───────────┬───────────┘              ▼                         ▼
+               │               ┌─────────────────────┐   ┌─────────────────────┐
+               │               │ crop of ONE person  │   │ full scene + boxes  │
+               │               │ eyes / svfd         │   │ PADQ template       │
+               │               └──────────┬──────────┘   └──────────┬──────────┘
+               │                          └────────────┬────────────┘
+               │                                       ▼
+               │                         5. one call per FRAME  (K=1)
+               │                             one answer per FRAME
+               │                                       │
+               └───────────────────┬───────────────────┘
+                                   ▼
                         6. merge → labels.json
 ```
 
@@ -243,16 +252,28 @@ Set `TRACKPAR_GPUS="0,1"` for the two cards to use. Stage 5 shards across both.
 
 ### Changing which prompt an attribute uses
 
-Prompts are plain text files. To swap one:
+Prompts are plain text files, and each one is paired with the parser that reads
+its answers back. Both live in `config/paths.sh`:
 
 ```bash
-# edit config/paths.sh
 export EXPOSED_PROMPT="$TRACKPAR_ROOT/prompts/crop/combined.txt"
+export EXPOSED_STYLE=meta      # parser: observation fields
 export WATCHED_PROMPT="$TRACKPAR_ROOT/prompts/crop/svfd.txt"
+export WATCHED_STYLE=svfd      # parser: svfd's own schema
 ```
 
-or point at one you wrote yourself. The runner substitutes `{K}` for the frame
-count in `prompts/crop/*`, and `{n}` / `{bboxes}` in `prompts/padq/*`.
+`STYLE` is the part that is easy to get wrong. Use `meta` for a prompt you point
+at with a file: it reads the observation fields (`eyes`, `nose`, `mouth`,
+`gaze`) that the `prompts/crop/*` family emits, and the caller applies the rule.
+The other styles (`svfd`, `plain`, `trueonly`, `padq`) build their own prompt
+text and read their own schema, so `PROMPT` is ignored for them.
+
+Mismatching the two fails quietly. The answer still parses as valid JSON; the
+fields the parser wants are simply absent, and the attribute comes back empty or
+always-false. Check the derive rate below after any swap.
+
+The runner substitutes `{K}` for the frame count in `prompts/crop/*`, and `{n}` /
+`{bboxes}` in `prompts/padq/*`.
 
 To try a prompt before committing to a full run:
 

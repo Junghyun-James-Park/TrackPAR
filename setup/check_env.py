@@ -135,7 +135,7 @@ def main():
             "age_eval", "phase1_build_all_fragments", "exp10_repr_infer",
             "exp11_model_infer", "exp20_unified_infer", "momentary_targeted_eval",
             "momentary_k1_control", "merge_deliverable", "full_grid",
-            "momentary_deploy_grid", "k1_grid"]
+            "momentary_deploy_grid", "k1_grid", "label_attribute"]
     broken = []
     for m in MODS:
         try:

@@ -23,6 +23,136 @@ the best single constant guess, which scores MAE 10.46. Momentary figures cover
 all 5,168 annotated instances. Full tables with confidence intervals are
 [below](#results).
 
+**Not restricted to those four.** To label an attribute of your own on your own
+data, see [Labelling a new attribute](#labelling-a-new-attribute).
+
+---
+
+## Labelling a new attribute
+
+One command. Give it a name, a sentence of definition, and a folder of images or
+a video:
+
+```bash
+bash label_attribute.sh \
+    --attr holding_item \
+    --definition "the person is holding a product in their hand" \
+    --images /data/my_frames
+```
+
+It writes `out/holding_item.json` and `out/holding_item.csv`, with the column
+named after your attribute. Nothing is renamed by hand.
+
+```
+subject,image,n_frames,holding_item,status
+frame_0001.jpg,frame_0001.jpg,1,True,ok
+frame_0002.jpg,frame_0002.jpg,1,False,ok
+```
+
+What runs, and in what order:
+
+| | | |
+|---|---|---|
+| 0 | route | identity or momentary? if momentary, facial or not? Cached in `out/attr_routing.json`, so an attribute is asked about once |
+| 1 | prompt | in `config/prompt_registry.json` already → reuse the measured one. Otherwise write one from exemplars |
+| 2 | infer | momentary → one call per image, K=1, no tracking. identity → K frames of one subject in a single call |
+| 3 | write | `.json` with the routing, the prompt source and the raw text of any answer that failed; `.csv` with just the labels |
+
+### Check it before spending GPU time
+
+```bash
+bash label_attribute.sh --self-test
+```
+
+Runs the parser against a set of answers, including the shapes that used to fail
+silently. No GPU, no model download, a second or two.
+
+### Your data
+
+```bash
+# a folder of person crops — each image is one subject
+--images /data/crops
+
+# full frames plus boxes — each box is one subject
+--images /data/frames --boxes boxes.json
+
+# a video — frames are extracted with ffmpeg first
+--video site.mp4 --fps 1
+```
+
+`boxes.json` is either `{"frame1.jpg": [[x1,y1,x2,y2], ...], ...}` or a list of
+`{"image": ..., "box": [...], "track_id": ...}`.
+
+For an **identity** attribute the answer is one per subject, so the frames of one
+person have to be grouped. Either give `track_id` in the boxes file, or pull it
+out of the filename:
+
+```bash
+--track-regex "tarid([0-9]+)"      # capture group 1 is the subject id
+```
+
+Without either, every image becomes its own subject and the run tells you so.
+
+### Try it small first
+
+```bash
+--limit 50
+```
+
+Processes the first 50 units after a stable sort, so repeated runs pick the same
+50. The run prints that the result is a subset; a positive rate measured on it is
+not the rate for your corpus.
+
+### Reading the output
+
+Two numbers are printed, and the second is the one that matters:
+
+```
+parsed as JSON : 24/24
+usable answers : 24/24   <-- the number that matters
+```
+
+They come apart. A prompt whose schema the model ignores still returns valid
+JSON: one arm in this project parsed 799 of 800 answers while only 536 carried
+the requested field. The `status` column separates `no-json`, `no-field` and
+`bad-value`, and the JSON keeps the raw text of every answer that was not usable.
+
+Then compare `predicted positive` against the rate you expect. A prompt far off
+that rate is usually mis-thresholded rather than blind, which is a different
+repair — see [docs/RESULTS.md](docs/RESULTS.md).
+
+### What to expect from a generated prompt
+
+**It has not been measured.** No generated prompt in this repository has been
+scored against ground truth. Both exemplar sets were written for face-visibility
+attributes, and the non-facial set is the PADQ template, which assumes a full
+scene with the target given as a box. Treat generated labels as a first pass, and
+check a sample by hand before building on them.
+
+Two things are guaranteed rather than hoped for. The output contract — the last
+paragraph of every generated prompt, fixing the field name — is written by the
+runner, not by the model, so the answer cannot come back under a name the reader
+is not looking for. And a generated prompt is validated before use; if it comes
+back as commentary rather than instructions, the runner retries once and then
+falls back to a plain template built from your definition, saying so.
+
+For an **identity** attribute there is nothing to generate from: both exemplar
+sets are momentary. The runner uses a built-in multi-frame template instead and
+prints that it did.
+
+Prompts land in `prompts/generated/<attr>.txt`. Edit one and re-run; it is reused
+unless you pass `--regenerate`.
+
+### Attribute names to avoid
+
+`eyes`, `nose`, `mouth`, `gaze`, `frames`, `gender`, `age`, `bbox_2d` are field
+names the exposed/watched parser reads as a schema signal. The runner refuses
+them rather than guessing — use `eyes_closed` rather than `eyes`.
+
+`exposed` and `watched` are accepted and take a different path: they have
+measured prompts in the registry, and the runner defers to the one those numbers
+came from.
+
 ---
 
 ## How the pipeline is shaped
@@ -405,6 +535,8 @@ config/prompt_registry.json  which attributes already have a prompt
 setup/check_env.py           pre-flight; refuses to run on a broken environment
 setup/fetch_weights.sh       install the adapter, local or from Drive
 pipeline/route_attributes.py stage 0
+label_attribute.sh           label ONE attribute on your own data
+pipeline/label_attribute.py  the end-to-end runner behind it
 pipeline/make_prompt.py      write a prompt for a new attribute
 pipeline/                    the rest of the run
 eval/                        scoring, with confidence intervals

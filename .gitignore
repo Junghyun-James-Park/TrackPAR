@@ -8,3 +8,6 @@ out/
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
+
+# Prompts written at run time by label_attribute.py.
+prompts/generated/

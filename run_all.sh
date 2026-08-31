@@ -34,7 +34,8 @@
 #
 # Why momentary skips tracking: every prompt measured either prefers K=1 or is
 # within noise of K=8 on exposed (5 of 7 prefer K=1; the two that do not are
-# -0.014 and -0.019, inside the +/-0.035 the 426-frame sample can resolve), and
+# -0.014 and -0.019, far inside what 426 frames resolve: a bootstrap puts one
+# arm's 95% interval at about +/-0.05), and
 # on watched K=1 wins outright (svfd 0.667 against 0.000). Since momentary needs
 # a per-frame answer anyway, the tracking stage buys nothing for it.
 #

@@ -133,7 +133,7 @@ grouping frames by person buys nothing — and the measurements agree:
 
 | | K=1 vs K=8 |
 |---|---|
-| exposed | 5 of 7 prompts prefer K=1. The two that do not are −0.014 and −0.019, inside the ±0.035 the 426-frame sample can resolve. |
+| exposed | 5 of 7 prompts prefer K=1. The two that do not are −0.014 and −0.019, far inside what 426 frames resolve; a bootstrap puts a single arm's 95% interval at about ±0.05. |
 | watched | K=1 wins outright: `svfd` scores 0.667 against **0.000** at K=8. |
 
 `svfd` at K=8 reads zero because, packed into a multi-frame call, the model

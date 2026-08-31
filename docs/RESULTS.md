@@ -64,10 +64,16 @@ Reproduce with `python eval/k1_grid.py`.
 | svfd | 0.719 | 0.500 | +0.219 | **0.667** | 0.000 | **+0.667** |
 | eyes | 0.714 | 0.728 | −0.014 | 0.468 | 0.359 | +0.109 |
 | combined | 0.674 | 0.540 | +0.135 | 0.526 | 0.455 | +0.072 |
-| metav4 | 0.647 | 0.730 | −0.082 | 0.415 | 0.462 | −0.046 |
+| metav4 * | 0.647 | 0.611 | +0.036 | 0.415 | 0.462 | −0.046 |
 | trueonly | 0.632 | 0.606 | +0.026 | 0.408 | 0.242 | +0.166 |
 | features | 0.702 | 0.659 | +0.043 | — | — | — |
 | plain | 0.648 | 0.667 | −0.019 | 0.000 | 0.000 | 0.000 |
+
+\* An earlier run of `metav4` scored 0.730 at K=8, and that figure is **not
+reproducible**: the prompt file was overwritten after the run, and the file now
+in the repository scores 0.611. The table carries what `eval/k1_grid.py` prints
+today. Treat any 0.730 in older notes as belonging to a prompt that no longer
+exists.
 
 **Watched improves at K=1 for every prompt that can do it at all.** Packed into a
 multi-frame call, the model applies the prompt's stated rarity prior to the whole
@@ -82,7 +88,8 @@ That is why the pipeline runs momentary attributes at **K=1 with no tracker**.
 Grouping frames only helps when several views describe one fixed fact, which is
 the identity case; a momentary attribute needs its own answer per frame either
 way. On exposed, 5 of 7 prompts prefer K=1 outright and the two that do not
-(−0.014, −0.019) sit inside the ±0.035 this 426-frame sample can resolve, so
+(−0.014, −0.019) are far inside what this 426-frame sample can resolve — a
+bootstrap over the K=1 arms puts a single arm's 95% interval at about ±0.05 — so
 there is no K=8 advantage to give up.
 
 The cost is one call per frame: ~4.4 s each, roughly 9,500 frames, about 6 h

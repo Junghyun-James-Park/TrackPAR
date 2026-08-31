@@ -78,8 +78,15 @@ K=8 against 1.9% at K=1, with a true rate of 3.1%.
 happens to be calibrated at a different K. Any claim about K has to name the
 attribute and the prompt.
 
-That is why `run_all.sh` runs the two attributes as separate passes, and why
-stage 5b costs ~11 h against stage 5a's ~3 h.
+That is why the pipeline runs momentary attributes at **K=1 with no tracker**.
+Grouping frames only helps when several views describe one fixed fact, which is
+the identity case; a momentary attribute needs its own answer per frame either
+way. On exposed, 5 of 7 prompts prefer K=1 outright and the two that do not
+(−0.014, −0.019) sit inside the ±0.035 this 426-frame sample can resolve, so
+there is no K=8 advantage to give up.
+
+The cost is one call per frame: ~4.4 s each, roughly 9,500 frames, about 6 h
+across two GPUs per attribute.
 
 ## The predicted-positive rate is a diagnostic
 

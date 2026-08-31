@@ -8,18 +8,66 @@ methodology. It does not narrate how the system was arrived at.
 
 ## 1. The pipeline
 
-Six stages. SAM 3 finds and tracks every person; a vision-language model then
-labels four attributes.
+Seven stages, and which of them run depends on the attribute. Stage 0 asks the
+model one question and everything else follows from the answer.
 
 ```
-1  SAM 3 tracking          video frames  ->  per-person tracks
-2  fragment building       tracks        ->  usable tracks with boxes and images
-3  gender                  K=4 frames per call, identity LoRA
-4  age                     K=4 frames per call, identity LoRA, integer output
-5a exposed                 K=8 frames per call, base model, `eyes` prompt
-5b watched                 K=1 frame per call, base model, `svfd` prompt
-6  merge                   one label file
+                    ┌──────────────────────────────┐
+   attribute  ─────▶│  0. route  (VLM, cached)     │
+                    └──────────────┬───────────────┘
+                       identity    │    momentary
+              ┌────────────────────┴────────────────────┐
+              ▼                                         ▼
+   ┌──────────────────────┐               ┌──────────────────────────┐
+   │ 1. SAM 3 tracking    │               │  no tracking             │
+   │ 2. fragments         │               │  boxes come from the     │
+   │ 3. gender  K=4       │               │  annotation file         │
+   │ 4. age     K=4       │               │                          │
+   │                      │               │  5. one call per FRAME   │
+   │ one answer per TRACK │               │     one answer per FRAME │
+   └──────────┬───────────┘               └────────────┬─────────────┘
+              └──────────────────┬─────────────────────┘
+                                 ▼
+                        6. merge → labels.json
 ```
+
+Routing is cached in `out/attr_routing.json`: an attribute is sent to the model
+once and never again.
+
+### Stage 0, and why it is trusted
+
+The router was validated before being wired in. It was given three sets at once:
+
+| set | what it is | result |
+|---|---|---|
+| the four shipped attributes | routing already decided by hand | **4/4 matched** |
+| five non-facial momentary candidates | pushing a cart, holding an item, bending down, hand in pocket, talking | separated correctly; `talking` called facial, on the grounds of mouth movement |
+| the 40 benchmark attributes | UPAR/RAP v2 | **40/40 identity**, none momentary |
+
+The last row is the measured form of a claim made later in this report: the
+public benchmark contains no attribute of the kind the momentary route exists
+for.
+
+One caveat worth recording. Five attributes sit on the boundary — hat, bag,
+backpack, and both kinds of glasses. A differently worded probe called those
+"changes during a track"; this one calls them identity. Both readings are
+defensible (few shoppers remove a hat during a visit), but it means the router's
+answer on removable accessories depends on how the question is asked.
+
+### After routing: which prompt
+
+```
+momentary ──▶ does config/prompt_registry.json name a prompt for this attribute?
+                yes ──▶ reuse it
+                no  ──▶ pipeline/make_prompt.py writes one from exemplars
+                          facial     → eyes, svfd, combined
+                          non-facial → the PADQ template
+```
+
+Reuse is decided by an explicit table rather than a second model judgement.
+Given that the routing prompt itself flips borderline cases when reworded,
+adding another judgement would add another place for that to happen. The table
+is human-verified; anything absent from it goes to generation.
 
 ### The one structural decision
 
@@ -68,23 +116,37 @@ hurts age (6.65 → 7.70) is the model fine-tuned on *single* images; four frame
 are off-distribution for it. The shipped adapter was fine-tuned on multi-image
 inputs for this reason and is the only arm best at both.
 
-### Why exposed and watched use different prompts and different K
+### Why momentary skips tracking
 
-They were measured under one protocol and they do not agree on a setting.
+Tracking exists so that K frames of one person can enter a single call. Only the
+identity branch uses that. A momentary attribute needs an answer per frame, so
+grouping frames by person buys nothing — and the measurements agree:
 
-| | best prompt | at K | F1 |
-|---|---|---|---|
-| exposed | `eyes` | 8 | 0.728 |
-| watched | `svfd` | **1** | 0.740 |
+| | K=1 vs K=8 |
+|---|---|
+| exposed | 5 of 7 prompts prefer K=1. The two that do not are −0.014 and −0.019, inside the ±0.035 the 426-frame sample can resolve. |
+| watched | K=1 wins outright: `svfd` scores 0.667 against **0.000** at K=8. |
 
-`svfd` at K=8 scores watched **0.000**. Packed into a multi-frame call, the model
+`svfd` at K=8 reads zero because, packed into a multi-frame call, the model
 applies the prompt's stated rarity prior to the whole batch and answers no to
-every frame. At K=1 it judges each frame and reaches 0.740. `exposed` shows no
-such rule — the K effect there is prompt-dependent.
+every frame.
 
-The cost of this is concentrated in stage 5b: K=1 means one call per frame,
-~4.4 s each over ~9,500 frames, about 11 h on two GPUs. Stage 5a covers eight
-frames per call and finishes in ~3 h.
+So momentary runs at K=1 with no tracker. `bash run_all.sh --attrs "exposed
+watched"` needs neither SAM 3 nor its gated weights.
+
+### Which prompt each attribute uses
+
+| attribute | prompt | K | F1 |
+|---|---|---|---|
+| exposed | `eyes` | 1 | 0.689 [0.670, 0.708] |
+| watched | `svfd` | 1 | 0.740 [0.689, 0.784] |
+
+They differ because the measurements differ, not by design preference. On
+exposed the top four arms tie within overlapping intervals; on watched `svfd` is
+separated from every other arm.
+
+The cost is concentrated here: one call per frame at ~4.4 s, roughly 9,500
+frames, about 6 h across two GPUs per attribute.
 
 ---
 
@@ -203,7 +265,7 @@ covered.
 |---|---|---|
 | gender | 0.9456 | — |
 | age MAE | 3.63 years | best constant guess 10.46 |
-| exposed F1 | 0.728 | always-negative bAcc 0.500 |
+| exposed F1 | 0.689 | always-negative bAcc 0.500 |
 | watched F1 | 0.740 | always-negative bAcc 0.500 |
 
 Identity figures are on the 349 held-out tracks. Momentary figures are over all
@@ -438,8 +500,9 @@ attributes — one the benchmark simply does not carry.
 | fine-tuning transfers to an unseen public dataset | RAP v2, +0.0241 mA, 22/36 attributes improve | moderate |
 | 3-class age cannot express integer-age ability | 0.9645 against a 0.9430 majority baseline | strong |
 | the PAR schema has no field for observability | 5 changeable / 36 occludable / 0 annotated | supporting |
+| an attribute can be routed automatically | 4/4 shipped attributes matched the hand-built routing; 40/40 benchmark attributes routed identity | moderate |
 
-Not claimed: that this generalises to other stores, other camera geometries, or
+Not claimed: that a generated prompt performs as well as a hand-written one — every momentary attribute measured here is about face visibility or gaze, and both of their prompts were written by hand. Nor that this generalises to other stores, other camera geometries, or
 other populations. Only one deployment was annotated, and 7 of its 11 sessions
 carry momentary labels that are demonstrably wrong.
 

@@ -96,48 +96,30 @@ huggingface-cli login          # after accepting terms at
 If you already have tracks, skip all of this and start at stage 2 with
 `bash run_all.sh --from fragments`.
 
-**3. The identity LoRA adapter**, ~1.2 GB, for gender and age. It is not public;
-obtain it from the authors as either a directory or a Google Drive link.
+**3. The identity LoRA adapter**, 1.2 GB, for gender and age.
 
 ```bash
-# from a local copy
-bash setup/fetch_weights.sh /path/to/adapter_dir
-
-# from Google Drive (accepts a bare file id or any share-URL shape)
 pip install gdown
-bash setup/fetch_weights.sh --gdrive https://drive.google.com/file/d/<ID>/view
+bash setup/fetch_weights.sh --gdrive <SHARE_URL>
 ```
 
-The script prints the sha256 of both weight files afterwards. Compare them
-against the published hashes: a truncated download is otherwise
-indistinguishable from a complete one, and a missing
-`non_lora_state_dict.bin` fails silently rather than loudly (see below).
+The link is in [docs/WEIGHTS.md](docs/WEIGHTS.md). The script accepts a bare file
+id or any share-URL shape, unpacks the archive, and prints the sha256 of both
+weight files so you can check the download against the published hashes — a
+truncated transfer is otherwise indistinguishable from a complete one.
+
+The archive holds only what inference reads: the LoRA weights, the trained vision
+tower, and the tokenizer/processor config. Optimiser state is not included, so
+this cannot be used to resume training.
+
+If you would rather install from a local copy:
+
+```bash
+bash setup/fetch_weights.sh /path/to/adapter_dir
+```
 
 Without the adapter, unset `IDENTITY_ADAPTER` to run identity on the base model —
 the pipeline still works, the numbers drop.
-
-<details>
-<summary>Sharing the adapter via Google Drive (for whoever distributes it)</summary>
-
-```bash
-# 1. pack the adapter directory
-cd /path/to/parent
-tar -czf identity_lora.tar.gz identity_lora/
-
-# 2. record the hashes to publish alongside the link
-sha256sum identity_lora/adapter_model.safetensors \
-          identity_lora/non_lora_state_dict.bin
-
-# 3. upload identity_lora.tar.gz to Drive, then set sharing to
-#    "Anyone with the link" — "Restricted" makes gdown receive an HTML
-#    permission page instead of the archive, which the script detects and
-#    reports rather than leaving a corrupt file behind.
-```
-
-The archive must contain `non_lora_state_dict.bin`. Packing only
-`adapter_model.safetensors` produces a download that loads without error and
-evaluates the wrong model.
-</details>
 
 The base model (`Qwen/Qwen3.5-9B`) downloads from HuggingFace on first use.
 
@@ -293,6 +275,7 @@ prompts/                 all twelve scored prompts
 src/                     model loading shared with the training tree
 run_all.sh               six stages, resumable
 docs/RESULTS.md          measured numbers and how to read them
+docs/WEIGHTS.md          adapter download link and checksums
 docs/FINAL_REPORT.md     the delivered system: pipeline, model, data, evaluation
 ```
 

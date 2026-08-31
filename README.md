@@ -1,293 +1,360 @@
 # TrackPAR
 
-Person-attribute auto-labelling for overhead retail CCTV. SAM 3 tracks every
-person, then a vision-language model labels four attributes per track.
+Automatic person-attribute labelling for CCTV video. You give it an attribute;
+it works out how to label it, runs a vision-language model over your footage, and
+writes one label file.
 
-| attribute | shape | how | measured |
-|---|---|---|---|
-| gender | one per track | Qwen3.5-9B + identity LoRA, K=4 frames per call | 0.9456 accuracy |
-| age | one per track | same adapter, separate integer prompt, K=4 | MAE 3.63 years |
-| exposed | one per **frame** | base 9B, `eyes` prompt, K=8 | F1 0.728 |
-| watched | one per **frame** | base 9B, `svfd` prompt, **K=1** | F1 0.740 |
-
-gender and age are held-out scores on 349 tracks. The age number is worth reading
-against the best single constant guess, which scores MAE 10.46. exposed and
-watched are measured over all 5,168 annotated instances, with bootstrap
-confidence intervals — see [docs/RESULTS.md](docs/RESULTS.md), which also explains
-why the two use different prompts and different K.
-
-### Why tracking, and not just classifying crops
-
-Every identity number above is measured **per track**, with K frames of the same
-person in one call. That is the reason the pipeline tracks at all, and it is worth
-a number rather than an assertion.
-
-Same model, same 62 held-out tracks, only the way frames are used changes:
-
-| model | frames used | gender | age MAE | within 5 yr | within 10 yr |
-|---|---|---|---|---|---|
-| base-4B | one frame at a time (K=1) | 0.8710 | 11.17 | 0.298 | 0.577 |
-| | per frame, then majority vote | 0.9194 | 9.74 | 0.339 | 0.645 |
-| | **K frames in one call** | **0.9839** | **8.69** | 0.435 | 0.694 |
-| base-9B, no fine-tune | one frame at a time | 0.8548 | 11.51 | 0.363 | 0.573 |
-| | per frame, then majority vote | 0.8871 | 9.45 | 0.468 | 0.645 |
-| | **K frames in one call** | **0.9516** | 9.71 | 0.403 | 0.661 |
-| 9B, fine-tuned single-image | one frame at a time | 0.8548 | 8.46 | 0.500 | 0.738 |
-| | per frame, then majority vote | 0.9032 | **6.65** | 0.613 | 0.806 |
-| | K frames in one call | 0.9000 | 7.70 | 0.400 | 0.800 |
-| 9B, fine-tuned multi-image | one frame at a time | 0.9032 | 7.12 | 0.577 | 0.802 |
-| | per frame, then majority vote | 0.9677 | 5.98 | 0.661 | 0.887 |
-| | **K frames in one call** | **0.9677** | **5.37** | 0.710 | 0.855 |
-
-Reading down each model, the gain from tracking is consistent:
-
-| model | gender | age MAE |
-|---|---|---|
-| base-4B | 0.8710 → 0.9839 (**+0.113**) | 11.17 → 8.69 (**−2.48**) |
-| base-9B, no fine-tune | 0.8548 → 0.9516 (**+0.097**) | 11.51 → 9.71 (**−1.80**) |
-| 9B, FT single-image | 0.8548 → 0.9000 (+0.045) | 8.46 → 7.70 (−0.76) |
-| 9B, FT multi-image | 0.9032 → 0.9677 (**+0.065**) | 7.12 → 5.37 (**−1.75**) |
-
-Three things this shows.
-
-**Grouping frames beats voting over them.** Majority vote already helps — it
-averages away per-frame noise — but handing K frames to the model in one call
-helps more in every row but one. The model is not just voting; it is using views
-of the same person together.
-
-**The gain is largest where the model is weakest.** base-4B gains +0.113 gender,
-the fine-tuned multi-image model +0.065. Tracking substitutes for model capacity,
-which is what makes it worth the tracking cost on a small backbone.
-
-**Fine-tuning and tracking are not interchangeable.** The one row where grouping
-does not help on age is the model fine-tuned on *single* images (6.65 → 7.70): it
-was trained to read one crop, so being handed four is off-distribution. The
-adapter this pipeline ships was fine-tuned on multi-image inputs for that reason,
-and it is the only arm that is best at both (0.9677 / 5.37).
-
-Note these are 62 tracks, a development set from an earlier stage, so read the
-direction and the size of the effect rather than the third decimal. The shipped
-numbers at the top of this README are on the 349-track held-out set.
+```bash
+source config/paths.sh
+bash run_all.sh --attrs "exposed watched gender age"
+```
 
 ---
 
-## What has to be true before anything runs
+## How the pipeline is shaped
 
-Three things are not in this repository and have to be obtained separately.
-
-**1. The corpus.** Overhead CCTV frames plus per-frame person boxes. Not
-redistributable here; obtain from the authors. The pipeline needs:
+Everything follows from one question asked once per attribute: **is this a
+property of the person, or a property of the frame?**
 
 ```
-LOTTE_IMAGES   frames, one directory per recording session
-LOTTE_ANNOT    per-frame person instances (JSON), used to build tracks
-LOTTE_CSV      ground truth, only needed to SCORE — a labelling run never reads it
+                    ┌──────────────────────────────┐
+   attribute  ─────▶│  0. route  (VLM, cached)     │
+                    └──────────────┬───────────────┘
+                       identity    │    momentary
+              ┌────────────────────┴────────────────────┐
+              ▼                                         ▼
+   ┌──────────────────────┐               ┌──────────────────────────┐
+   │ 1. SAM 3 tracking    │               │  no tracking needed      │
+   │ 2. fragments         │               │  boxes come straight     │
+   │ 3. gender  K=4 →1답  │               │  from the annotations    │
+   │ 4. age     K=4 →1답  │               │                          │
+   │                      │               │  5. one call per FRAME   │
+   │ one answer per TRACK │               │     one answer per FRAME │
+   └──────────┬───────────┘               └────────────┬─────────────┘
+              └──────────────────┬─────────────────────┘
+                                 ▼
+                        6. merge → labels.json
 ```
 
-**2. SAM 3**, for stage 1 only. It is public but the weights are gated:
+**Identity attributes are tracked.** Tracking exists so that K frames of the same
+person can go into one call. That is worth doing: on the same 62 held-out tracks,
+grouping frames rather than labelling them one at a time gains **+0.045 to +0.113
+gender accuracy** and **0.76 to 2.48 years of age MAE**, across four different
+models.
+
+**Momentary attributes are not tracked.** The answer is per frame, so knowing
+which frames belong to the same person buys nothing. Skipping stages 1–2 also
+removes SAM 3 from the requirements — if you only want momentary attributes, you
+need neither the tracker nor its gated weights.
+
+**Stage 0 is cached.** An attribute is routed once and stored in
+`out/attr_routing.json`. Re-running never re-asks.
+
+### What stage 0 does with a new attribute
+
+```
+route ──▶ identity ──▶ identity adapter, K=4
+      │
+      └─▶ momentary ──▶ is there a prompt written for this attribute?
+                          │
+                    yes ──┴──▶ reuse it        (config/prompt_registry.json)
+                     no  ─────▶ generate one   (pipeline/make_prompt.py)
+                                  facial     → exemplars: eyes, svfd, combined
+                                  non-facial → exemplars: the PADQ template
+```
+
+Whether an existing prompt is reused comes from an explicit table, not a model
+judgement. Two of the four shipped attributes have prompts written specifically
+for them; anything else goes to generation.
 
 ```bash
-git clone https://github.com/facebookresearch/sam3
-pip install -e sam3
-huggingface-cli login          # after accepting terms at
-                               # https://huggingface.co/facebook/sam3
+# route a new attribute
+python pipeline/route_attributes.py --attrs "holding_item: the person is holding a product"
+
+# see what has been routed so far (no GPU)
+python pipeline/route_attributes.py --show
+
+# write a prompt for it
+python pipeline/make_prompt.py --attr holding_item
 ```
-
-If you already have tracks, skip all of this and start at stage 2 with
-`bash run_all.sh --from fragments`.
-
-**3. The identity LoRA adapter**, 1.2 GB, for gender and age.
-
-```bash
-pip install gdown
-bash setup/fetch_weights.sh --gdrive <SHARE_URL>
-```
-
-The link is in [docs/WEIGHTS.md](docs/WEIGHTS.md). The script accepts a bare file
-id or any share-URL shape, unpacks the archive, and prints the sha256 of both
-weight files so you can check the download against the published hashes — a
-truncated transfer is otherwise indistinguishable from a complete one.
-
-The archive holds only what inference reads: the LoRA weights, the trained vision
-tower, and the tokenizer/processor config. Optimiser state is not included, so
-this cannot be used to resume training.
-
-If you would rather install from a local copy:
-
-```bash
-bash setup/fetch_weights.sh /path/to/adapter_dir
-```
-
-Without the adapter, unset `IDENTITY_ADAPTER` to run identity on the base model —
-the pipeline still works, the numbers drop.
-
-The base model (`Qwen/Qwen3.5-9B`) downloads from HuggingFace on first use.
 
 ---
 
 ## Setup
 
 Two conda environments, because SAM 3 and the VLM stack disagree on
-`transformers`: SAM 3 needs 5.8.x, the VLM side is pinned to 5.3.0.
+`transformers`: SAM 3 needs 5.8.x, the VLM side is pinned to 5.3.0. **You only
+need the second one unless you are labelling identity attributes.**
 
 ```bash
-git clone <this repo> TrackPAR && cd TrackPAR
+git clone https://github.com/<your-account>/TrackPAR.git
+cd TrackPAR
 
-# stages 2-6 (the VLM pipeline)
 conda create -n trackpar python=3.11 -y
 conda activate trackpar
 pip install -r requirements.txt
-
-# stage 1 only (SAM 3 tracking)
-conda create -n sam3 python=3.12 -y
-conda activate sam3
-pip install -r requirements-sam3.txt
-pip install -e /path/to/sam3
 ```
 
-Then point the config at your machine and check it:
+### The corpus
+
+Frames plus per-frame person boxes. Not redistributable here.
 
 ```bash
-$EDITOR config/paths.sh        # LOTTE_*, SAM3_SRC, IDENTITY_ADAPTER, TRACKPAR_GPUS
+$EDITOR config/paths.sh
+```
+```
+LOTTE_IMAGES   frames, one directory per recording session
+LOTTE_ANNOT    per-frame person instances (JSON) — this is where boxes come from
+LOTTE_CSV      ground truth; only needed to SCORE, never to label
+```
+
+### The identity adapter — 1.2 GB
+
+Needed for `gender` and `age`. Momentary attributes run on the base model.
+
+```bash
+pip install gdown
+bash setup/fetch_weights.sh --gdrive \
+  https://drive.google.com/file/d/1uPuaeyGZKUWyHm7AHU21E4LRdcHYnsrT/view?usp=sharing
+```
+
+The script unpacks it and prints the sha256 of both weight files. Check them:
+
+| file | size | sha256 |
+|---|---|---|
+| `adapter_model.safetensors` | 330.3 MB | `63dc9e9ec6df2b4ee100f84e3c5cdcbaef21952efc65d649c4e526cefb8af5c0` |
+| `non_lora_state_dict.bin` | 869.9 MB | `408e9eeb88df3985532cac345cd4970e0f700e785ba140c9df7cde1eec562ad3` |
+
+A truncated download is otherwise indistinguishable from a complete one.
+
+> **Both files matter.** `PeftModel.from_pretrained` loads
+> `adapter_model.safetensors` and **silently ignores** `non_lora_state_dict.bin`,
+> which holds the trained vision tower and merger. Nothing raises. A copy missing
+> the second file evaluates a base vision tower underneath a fine-tuned adapter —
+> a model that never existed — and it scores plausibly enough to look correct.
+> `setup/check_env.py` refuses to run without it.
+
+Without the adapter, unset `IDENTITY_ADAPTER` to run identity on the base model.
+The pipeline still works; the numbers drop.
+
+### SAM 3 — only for identity attributes
+
+Public, but the weights are gated.
+
+```bash
+git clone https://github.com/facebookresearch/sam3
+conda create -n sam3 python=3.12 -y && conda activate sam3
+pip install -r requirements-sam3.txt
+pip install -e /path/to/sam3
+
+huggingface-cli login     # after accepting the terms at
+                          # https://huggingface.co/facebook/sam3
+```
+
+Then point `SAM3_ENV` and `SAM3_SRC` in `config/paths.sh` at them. If you already
+have tracks, or only want momentary attributes, skip all of this.
+
+### Check before running
+
+```bash
 conda activate trackpar
 source config/paths.sh
 python setup/check_env.py
 ```
 
-`check_env.py` is not decorative. Every check in it corresponds to a mistake that
-cost real GPU time during development:
-
-- **`HF_HOME` is writable.** A shell profile pointing it at an unwritable mount
-  makes every model load fail with a `PermissionError` that reads like a
-  HuggingFace outage. `config/paths.sh` overrides an inherited value that fails
-  this test rather than passing it through.
-- **`non_lora_state_dict.bin` is present.** `PeftModel.from_pretrained` loads
-  `adapter_model.safetensors` and silently ignores that file, which holds the
-  trained vision tower and merger. Nothing raises. You end up evaluating a base
-  vision tower under a fine-tuned adapter — a model that never existed — and it
-  scores plausibly enough to publish.
-- **All 15 pipeline modules import.** Missing files otherwise surface only when
-  the run reaches them, which in practice meant a crash after model load. Three
-  files were missing on the first packaging attempt, every one pulled in
-  transitively rather than named anywhere obvious.
+Twelve checks. Each one corresponds to a mistake that cost GPU time here — an
+unwritable `HF_HOME` that reads like a HuggingFace outage, a missing
+`non_lora_state_dict.bin`, a pipeline module that only fails once the run reaches
+it.
 
 ---
 
-## Running it
+## Running
 
 ```bash
 source config/paths.sh
-bash run_all.sh                    # all six stages
-bash run_all.sh --from fragments   # reuse existing tracks
-bash run_all.sh --score            # and grade afterwards
+
+bash run_all.sh                                   # the four shipped attributes
+bash run_all.sh --attrs "exposed watched"         # momentary only — no tracking
+bash run_all.sh --from fragments                  # reuse existing tracks
+bash run_all.sh --score                           # and grade afterwards
 ```
 
 Every stage skips itself when its output exists, so an interrupted run resumes.
 
 | stage | script | output | cost |
 |---|---|---|---|
-| 1 | `track_sam3_chunked.py` | `out/track_sam3/<session>/track.json` | hours, one GPU, **sam3 env** |
+| 0 | `route_attributes.py` | `out/attr_routing.json` | seconds, cached |
+| 1 | `track_sam3_chunked.py` | `out/track_sam3/` | hours, **sam3 env** |
 | 2 | `phase1_build_all_fragments.py` | `out/phase1_fragments.json` | minutes, CPU |
 | 3 | `multiimg_eval.py` | `out/identity.json` | ~2.5 h |
 | 4 | `age_eval.py` | `out/age.json` | ~40 min |
-| 5a | `exp20_unified_infer.py` | `out/momentary_exposed_*.json` | ~3 h, two GPUs |
-| 5b | `momentary_k1_control.py` | `out/momentary_watched_sh*.json` | **~11 h**, two GPUs |
+| 5 | `momentary_k1_control.py` | `out/momentary_*.json` | ~6 h per attribute, two GPUs |
 | 6 | `merge_labels.py` | `out/labels.json` | seconds |
 
-Stage 5b is the expensive one and the cost is structural, not an inefficiency:
-`watched` only works at K=1, which means one model call per frame — about 18,000
-calls at ~4.4 s each. `exposed` at K=8 covers eight frames per call, hence ~3 h
-for the same corpus.
+Set `TRACKPAR_GPUS="0,1"` for the two cards to use. Stage 5 shards across both.
 
-Set `TRACKPAR_GPUS` to the two cards you want. Stages 5a and 5b shard across
-both; 3 and 4 use whatever `device_map="auto"` picks.
+### Changing which prompt an attribute uses
 
----
-
-## The prompts
-
-All twelve prompts that were scored are in `prompts/`, so any of them can be
-swapped in through `config/paths.sh`.
-
-```
-prompts/crop/     one cropped person per call
-  combined.txt    eyes / nose / mouth / gaze reported separately, rule applied in code
-  eyes.txt        eye visibility and gaze direction only
-  features.txt    eyes / nose / mouth, no gaze
-  metav4.txt      OPRO-optimised; what an earlier version of this pipeline shipped
-  plain.txt       ask for exposed and watched directly
-  subattr.txt     the 40-attribute schema, momentary derived from it
-  svfd.txt        graded face-visibility tiers plus an explicit rarity prior
-  trueonly.txt    sparse output format: list only the frames that are true
-
-prompts/padq/     full scene, target named by bounding box, ONE ATTRIBUTE PER CALL
-  exposed_v3.txt  watched_v2.txt  gender_v3.txt  age_v1.txt
-```
-
-`prompts/padq/*` use a different representation from `prompts/crop/*`, so a
-comparison across the two groups mixes prompt with representation. They take
-`{n}` and `{bboxes}` placeholders; the crop prompts take `{K}`.
-
-To change what ships, edit `EXPOSED_PROMPT` / `EXPOSED_K` / `WATCHED_PROMPT` /
-`WATCHED_K` in `config/paths.sh`. **K matters as much as the prompt** — on
-identical frames the same prompt moves by up to 0.667 watched F1 between K=8 and
-K=1.
-
----
-
-## Scoring
+Prompts are plain text files. To swap one:
 
 ```bash
-python eval/full_grid.py               # every prompt, bootstrap CIs
-python eval/momentary_deploy_grid.py   # K=8 deployment path
-python eval/k1_grid.py                 # K=1 against K=8, same frames
+# edit config/paths.sh
+export EXPOSED_PROMPT="$TRACKPAR_ROOT/prompts/crop/combined.txt"
+export WATCHED_PROMPT="$TRACKPAR_ROOT/prompts/crop/svfd.txt"
 ```
 
-Two constraints are built into these and should not be worked around.
+or point at one you wrote yourself. The runner substitutes `{K}` for the frame
+count in `prompts/crop/*`, and `{n}` / `{bboxes}` in `prompts/padq/*`.
 
-**Scoring is restricted to the sessions that are actually annotated.** In the
-corpus this was built on, 4 of 11 sessions carry usable `exposed`/`watched`
-labels. The other 7 store an explicit `False` on every row, and that value is
-wrong: one of them is the same camera as an annotated session that reads 13.7%
-exposed, and faces are plainly visible in its crops. Scoring against it would be
-scoring against noise. The four annotated sessions hold 99.8% of exposed
-positives and 100% of watched positives, so the restriction costs almost nothing.
+To try a prompt before committing to a full run:
 
-**Comparisons carry confidence intervals.** `full_grid.py` resamples the
-instances 2,000 times, scoring both arms on the same resample each time, and
-reports the 95% interval. Where intervals overlap it says so rather than printing
-a ranking. This is load-bearing: on exposed the top four arms are within 0.033 of
-each other and cannot be separated by this data, which is not visible from the
-point estimates.
+```bash
+python pipeline/momentary_targeted_eval.py \
+    --natural --session <SESSION_ID> --target watched \
+    --n-pos 400 --n-neg 400 --repr full_mask \
+    --prompt-file prompts/crop/eyes.txt --prefill '{"frames": [{"eyes": "' \
+    --out out/try_eyes.json
+```
+
+Watch the **derive rate**, not the parse rate. A prompt whose schema the model
+ignores still returns valid JSON: one arm here read "parse-valid 799/800" while
+only 536 answers carried the requested field. The runner prints
+`derive <attr>: N/M answers usable` and flags anything between 0% and 90%.
+
+---
+
+## The prompts, and the ideas behind them
+
+Twelve prompts, all of which were scored. They fall into families, and the
+families are the interesting part.
+
+### `prompts/crop/` — one cropped person per call
+
+| prompt | idea |
+|---|---|
+| `plain` | Ask for the attribute directly, with a one-line definition. The control. |
+| `trueonly` | Sparse output for a sparse event: list only the frames where it is true, so an empty list is the normal answer. |
+| `svfd` | Do not ask for a verdict; ask for a graded **visibility tier** (`clearly_visible` / `partially_visible` / `not_visible`) plus an explicit rarity prior, then apply the rule in code. |
+| `eyes` | Push that further: ask only what is **observable** — are the eyes resolvable, which way is the gaze — and derive the attribute outside the model. |
+| `features` | Same move, split three ways: eyes, nose, mouth reported separately. |
+| `combined` | All four observations in one call, so several decision rules can be compared afterwards from one run. |
+| `subattr` | The 40-attribute identity schema, with the momentary attribute derived from it. |
+| `metav4` | Machine-optimised (OPRO) over earlier prompts. |
+
+The thread running through `svfd → eyes → features → combined` is **moving the
+decision out of the model**. The model is asked what it can see; the rule that
+turns observations into a label lives in code, where it can be changed without
+re-running anything.
+
+That move is what rescued `watched`. It did **not** help `exposed`: six different
+rules applied to `combined`'s stored answers span only 0.005, because 99% of
+answers set eyes, nose and mouth to the same value. The model makes one
+visibility judgement and repeats it three times, so there is nothing to combine.
+
+### `prompts/padq/` — full scene, one attribute per call
+
+The people are already detected; the prompt names them by bounding box and asks a
+single true/false question about each. `exposed_v3` and `watched_v2` differ only
+in the attribute name and its definition — **the rest is a template**, which is
+why this family is what stage 0 generates from for a new non-facial attribute.
+
+It also needs no crop and no track: a frame and its boxes are enough.
+
+---
+
+## Results
+
+Measured over **every annotated instance of the four annotated sessions**: 5,168
+instances, 1,353 `exposed` positives, 201 `watched` positives. Intervals are 95%
+paired bootstrap over instances, 2,000 resamples, both arms scored on the same
+resample each time. Reproduce with `python eval/full_grid.py`.
+
+### exposed — true rate 26.2%
+
+| prompt | F1 | 95% CI | bAcc | P | R | predicted+ |
+|---|---|---|---|---|---|---|
+| combined | **0.697** | [0.678, 0.716] | 0.810 | 0.626 | 0.788 | 33.0% |
+| eyes | 0.689 | [0.670, 0.708] | 0.799 | 0.637 | 0.751 | 30.9% |
+| subattr | 0.677 | [0.658, 0.696] | 0.790 | 0.628 | 0.735 | 30.6% |
+| PADQ `exposed_v3` * | 0.664 | [0.646, 0.682] | 0.797 | 0.550 | 0.837 | 39.9% |
+| features | 0.659 | [0.640, 0.677] | 0.789 | 0.559 | 0.802 | 37.6% |
+| svfd | 0.618 | [0.600, 0.636] | 0.766 | 0.482 | 0.859 | 46.6% |
+| metav4 | 0.607 | [0.589, 0.625] | 0.760 | 0.462 | 0.886 | 50.2% |
+| plain | 0.515 | [0.497, 0.531] | 0.666 | 0.356 | 0.927 | 68.1% |
+| trueonly | 0.453 | [0.438, 0.469] | 0.574 | 0.295 | 0.985 | 87.6% |
+
+**The top four are a tie** — overlapping intervals. 5,168 instances cannot
+separate them, and `exposed` looks capped near 0.70 at these crop sizes.
+
+### watched — true rate 3.9%
+
+| prompt | F1 | 95% CI | bAcc | P | R | predicted+ |
+|---|---|---|---|---|---|---|
+| svfd | **0.740** | [0.689, 0.784] | 0.888 | 0.694 | 0.791 | 4.4% |
+| PADQ `watched_v2` * | 0.585 | [0.536, 0.628] | 0.920 | 0.436 | 0.886 | 7.9% |
+| eyes | 0.508 | [0.459, 0.555] | 0.882 | 0.367 | 0.821 | 8.7% |
+| combined | 0.324 | [0.249, 0.395] | 0.609 | 0.584 | 0.224 | 1.5% |
+| trueonly | 0.312 | [0.243, 0.377] | 0.615 | 0.434 | 0.244 | 2.2% |
+| plain | 0.259 | [0.183, 0.330] | 0.580 | 0.611 | 0.164 | 1.0% |
+| metav4 | 0.211 | [0.186, 0.237] | 0.831 | 0.119 | 0.945 | 30.9% |
+| subattr | 0.165 | [0.102, 0.230] | 0.550 | 0.333 | 0.109 | 1.3% |
+
+**`svfd` is separated from every other arm.** The one place a prompt choice buys
+something unambiguous.
+
+\* PADQ sees the full scene with the target named by a bounding box rather than a
+crop, and answers one attribute per call. A gap against the other rows is prompt
+**and** representation together.
+
+Note the `predicted+` column. The worst arms are not failing to *see* the
+attribute — `trueonly` has recall 0.985 on exposed — they are calling almost
+everything positive. Distance from the true rate orders the ranking.
+
+### Identity
+
+| | value | baseline |
+|---|---|---|
+| gender | 0.9456 | — |
+| age MAE | 3.63 years | best constant guess 10.46 |
+
+On the 349 held-out tracks. **Do not quote whole-corpus identity scores**: run
+over every track, age reports MAE 1.16, but 924 of the 1,262 scored tracks were
+in the adapter's training data.
+
+More, including the comparison against RAP v2 which the model has never seen:
+[docs/RESULTS.md](docs/RESULTS.md) and [docs/FINAL_REPORT.md](docs/FINAL_REPORT.md).
 
 ---
 
 ## Layout
 
 ```
-config/paths.sh          every absolute path, in one file
-setup/check_env.py       pre-flight; refuses to run on a broken environment
-setup/fetch_weights.sh   install the identity adapter
-setup/patch_paths.py     rewrite baked-in literals to read the environment
-pipeline/                the scripts a run calls
-eval/                    scoring and comparison tables
-prompts/                 all twelve scored prompts
-src/                     model loading shared with the training tree
-run_all.sh               six stages, resumable
-docs/RESULTS.md          measured numbers and how to read them
-docs/WEIGHTS.md          adapter download link and checksums
-docs/FINAL_REPORT.md     the delivered system: pipeline, model, data, evaluation
+config/paths.sh              every absolute path, in one file
+config/prompt_registry.json  which attributes already have a prompt
+setup/check_env.py           pre-flight; refuses to run on a broken environment
+setup/fetch_weights.sh       install the adapter, local or from Drive
+pipeline/route_attributes.py stage 0
+pipeline/make_prompt.py      write a prompt for a new attribute
+pipeline/                    the rest of the run
+eval/                        scoring, with confidence intervals
+prompts/crop/                8 prompts, one cropped person per call
+prompts/padq/                4 prompts, full scene + boxes, one attribute per call
+run_all.sh                   all stages, resumable
+docs/FINAL_REPORT.md         the delivered system
+docs/RESULTS.md              every measured number and how to read it
 ```
 
-[docs/FINAL_REPORT.md](docs/FINAL_REPORT.md) is the document to hand to someone
-who wants the system rather than its history. It covers the pipeline and the one
-structural decision behind it, the model and how it was fine-tuned, the corpus
-and its annotation limits, the delivered output, the evaluation methodology, and
-a comparison against a public PAR benchmark the model has never seen.
-
-`setup/patch_paths.py --check` verifies no hardcoded path has crept back in.
-
 ---
+
+## Scoring caveat
+
+Momentary scoring is restricted to the sessions that are actually annotated. In
+the corpus this was built on, 4 of 11 carry usable `exposed`/`watched` labels; the
+other 7 record an explicit `False` on every row, and that value is wrong — one of
+them is the same camera as an annotated session reading 13.7% exposed, with faces
+plainly visible in its crops. The four annotated sessions hold 99.8% of exposed
+positives and 100% of watched positives, so the restriction costs almost nothing.
 
 ## Data terms
 

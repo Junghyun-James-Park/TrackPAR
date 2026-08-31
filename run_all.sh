@@ -6,34 +6,38 @@
 #   bash run_all.sh --from fragments   # skip tracking, reuse existing tracks
 #   bash run_all.sh --score            # and grade the result afterwards
 #
-# Six stages. Each writes into $TRACKPAR_OUT and skips itself when its output is
-# already there, so an interrupted run resumes instead of restarting.
+# Seven stages. Each writes into $TRACKPAR_OUT and skips itself when its output
+# is already there, so an interrupted run resumes instead of restarting.
 #
 # ---------------------------------------------------------------------------
-# The two design decisions this encodes
+# The shape of the pipeline
 # ---------------------------------------------------------------------------
 #
-# 1. IDENTITY IS PER TRACK, MOMENTARY IS PER FRAME.
-#    On tracks holding at least one positive, exposed changes between frames
-#    71.8% of the time and watched 85.7%. A single value per track for those two
-#    is the wrong shape of answer, not merely a coarse one. gender and age do not
-#    have that problem, and asking once per track lets the model see K views of
-#    the same person.
+#   0  route          per attribute: identity or momentary?   (cached)
+#      |
+#      +-- identity ------------------------------+
+#      |     1  SAM 3 tracking                    |  the track is what lets K
+#      |     2  fragments                         |  frames of ONE person go
+#      |     3  gender   K=4 frames, one call     |  into a single call
+#      |     4  age      K=4 frames, one call     |
+#      |                                          |
+#      +-- momentary -----------------------------+
+#            5  one call per FRAME (K=1)          |  no tracking: the answer is
+#               boxes come straight from the      |  per frame, so identity
+#               annotation file                   |  across frames is not needed
 #
-# 2. EXPOSED AND WATCHED USE DIFFERENT PROMPTS AT DIFFERENT K.
-#    Measured on all 5,168 annotated instances with bootstrap intervals:
+#   6  merge          one label file
 #
-#      exposed   combined 0.697 [0.678,0.716]  ~  eyes 0.689  ~  subattr 0.677
-#      watched   svfd     0.740 [0.689,0.784]  >  PADQ 0.585  >  eyes 0.508
+# Stage 0 decides which branch an attribute takes. Routing is cached in
+# out/attr_routing.json, so an attribute is sent to the model once and never
+# again.
 #
-#    exposed is a four-way tie; watched is svfd alone, separated from every other
-#    arm. And svfd's watched only works at K=1 — packed into a K=8 call it applies
-#    the prompt's stated rarity prior to the whole batch and answers no to
-#    everything, reading F1 0.000. See docs/RESULTS.md.
+# Why momentary skips tracking: every prompt measured either prefers K=1 or is
+# within noise of K=8 on exposed (5 of 7 prefer K=1; the two that do not are
+# -0.014 and -0.019, inside the +/-0.035 the 426-frame sample can resolve), and
+# on watched K=1 wins outright (svfd 0.667 against 0.000). Since momentary needs
+# a per-frame answer anyway, the tracking stage buys nothing for it.
 #
-# Identity runs through the fine-tuned adapter; momentary runs through the SAME
-# base model with no adapter. Fine-tuning for identity destroys momentary
-# prompt-following, so the two passes deliberately load different models.
 set -eu
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -41,18 +45,19 @@ source "$ROOT/config/paths.sh"
 mkdir -p "$TRACKPAR_OUT"
 export PYTHONPATH="$ROOT/pipeline:$ROOT/eval:$ROOT/src:${PYTHONPATH:-}"
 
-FROM="track"; SCORE=0
+FROM="route"; SCORE=0; ATTRS="exposed watched gender age"
 while [ $# -gt 0 ]; do
   case "$1" in
     --from) FROM="$2"; shift 2 ;;
     --score) SCORE=1; shift ;;
+    --attrs) ATTRS="$2"; shift 2 ;;
     *) echo "unknown argument: $1"; exit 1 ;;
   esac
 done
 
 say() { echo "=== [$(date '+%H:%M:%S')] $*"; }
 want() {
-  local order=(track fragments gender age momentary merge) w=-1 h=-1 i=0
+  local order=(route track fragments gender age momentary merge) w=-1 h=-1 i=0
   for s in "${order[@]}"; do
     [ "$s" = "$FROM" ] && w=$i
     [ "$s" = "$1" ] && h=$i
@@ -65,8 +70,27 @@ IFS=',' read -r G0 G1 <<< "$TRACKPAR_GPUS"; G1="${G1:-$G0}"
 say "pre-flight"
 python -u "$ROOT/setup/check_env.py" || { say "check_env failed — stopping"; exit 1; }
 
+# --------------------------------------------------------------- 0. route
+# Decides, per attribute, whether the identity branch or the momentary branch
+# runs. Cached in out/attr_routing.json, so an attribute is sent to the model
+# once and never again.
+if want route; then
+  say "0/6 routing attributes: $ATTRS"
+  CUDA_VISIBLE_DEVICES="$G0" python -u "$ROOT/pipeline/route_attributes.py" \
+      --attrs $ATTRS || { say "routing failed — stopping"; exit 1; }
+fi
+
+# Tracking exists to put K frames of ONE person in a single call, which only the
+# identity branch uses. If nothing routed to identity, stages 1-4 are skipped.
+NEED_IDENTITY=$(python -c '
+import json, sys
+r = json.load(open(sys.argv[1]))
+print("1" if any(r.get(a, {}).get("kind") == "identity" for a in sys.argv[2:]) else "0")
+' "$TRACKPAR_OUT/attr_routing.json" $ATTRS)
+say "identity branch needed: $NEED_IDENTITY"
+
 # ------------------------------------------------------------ 1. tracking
-if want track && [ ! -d "$TRACKPAR_OUT/track_sam3" ]; then
+if want track && [ "$NEED_IDENTITY" = "1" ] && [ ! -d "$TRACKPAR_OUT/track_sam3" ]; then
   say "1/6 SAM3 tracking  (needs the $SAM3_ENV environment, not this one)"
   CUDA_VISIBLE_DEVICES="$G0" python -u "$ROOT/pipeline/track_sam3_chunked.py"
 else
@@ -74,7 +98,7 @@ else
 fi
 
 # ----------------------------------------------------------- 2. fragments
-if want fragments && [ ! -s "$TRACKPAR_OUT/phase1_fragments.json" ]; then
+if want fragments && [ "$NEED_IDENTITY" = "1" ] && [ ! -s "$TRACKPAR_OUT/phase1_fragments.json" ]; then
   say "2/6 tracks -> fragments"
   python -u "$ROOT/pipeline/phase1_build_all_fragments.py" \
       --out "$TRACKPAR_OUT/phase1_fragments.json"
@@ -108,17 +132,21 @@ else
 fi
 
 # ----------------------------------------------------------- 5. momentary
-# Two passes, because the two attributes want different prompts and different K.
+# One call per FRAME, K=1. The prompt comes from config/prompt_registry.json when
+# the attribute has one written for it; otherwise pipeline/make_prompt.py writes
+# one from exemplars first.
 if want momentary; then
   if ! ls "$TRACKPAR_OUT"/momentary_exposed*.json >/dev/null 2>&1; then
-    say "5a/6 exposed — $(basename "$EXPOSED_PROMPT") @ K=$EXPOSED_K, sharded"
-    CUDA_VISIBLE_DEVICES="$G0" python -u "$ROOT/pipeline/exp20_unified_infer.py" \
-        --rep full_mask --K "$EXPOSED_K" --tag momentary_exposed --prompt meta \
-        --prompt_file "$EXPOSED_PROMPT" --shard_idx 0 --n_shards 2 &
+    say "5a/6 exposed — $(basename "$EXPOSED_PROMPT") @ K=1, per frame"
+    CUDA_VISIBLE_DEVICES="$G0" python -u "$ROOT/pipeline/momentary_k1_control.py" \
+        --prompt meta --prompt_file "$EXPOSED_PROMPT" --all-tracks \
+        --shard-idx 0 --n-shards 2 \
+        --out "$TRACKPAR_OUT/momentary_exposed_sh0.json" &
     P0=$!
-    CUDA_VISIBLE_DEVICES="$G1" python -u "$ROOT/pipeline/exp20_unified_infer.py" \
-        --rep full_mask --K "$EXPOSED_K" --tag momentary_exposed --prompt meta \
-        --prompt_file "$EXPOSED_PROMPT" --shard_idx 1 --n_shards 2 &
+    CUDA_VISIBLE_DEVICES="$G1" python -u "$ROOT/pipeline/momentary_k1_control.py" \
+        --prompt meta --prompt_file "$EXPOSED_PROMPT" --all-tracks \
+        --shard-idx 1 --n-shards 2 \
+        --out "$TRACKPAR_OUT/momentary_exposed_sh1.json" &
     P1=$!
     wait $P0 $P1
   else
@@ -126,8 +154,7 @@ if want momentary; then
   fi
 
   if ! ls "$TRACKPAR_OUT"/momentary_watched*.json >/dev/null 2>&1; then
-    # K=1 means one call per FRAME, so this is the expensive stage: ~4.4 s per
-    # frame, ~18,000 frames over 2,438 tracks, about 11 h across two cards.
+    # ~4.4 s per frame, ~9,500 frames, about 6 h across two cards per attribute.
     say "5b/6 watched — $(basename "$WATCHED_PROMPT") @ K=$WATCHED_K, per frame"
     CUDA_VISIBLE_DEVICES="$G0" python -u "$ROOT/pipeline/momentary_k1_control.py" \
         --prompt svfd --all-tracks --shard-idx 0 --n-shards 2 \

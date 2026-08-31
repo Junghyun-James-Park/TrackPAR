@@ -134,7 +134,7 @@ Two conda environments, because SAM 3 and the VLM stack disagree on
 need the second one unless you are labelling identity attributes.**
 
 ```bash
-git clone https://github.com/<your-account>/TrackPAR.git
+git clone https://github.com/Junghyun-James-Park/TrackPAR.git
 cd TrackPAR
 
 conda create -n trackpar python=3.11 -y

@@ -34,8 +34,9 @@ all 5,168 annotated instances. Full tables with confidence intervals are
 
 The pipeline is not restricted to those four: it decides how to label whatever
 attribute you hand it. [Labelling a new
-attribute](#labelling-a-new-attribute) is the section to read for that, and it
-needs none of the corpus, the adapter or SAM 3.
+attribute](#labelling-a-new-attribute) is the section to read for that. It needs
+neither the corpus nor the adapter, and it needs SAM 3 only if your frames hold
+several people and you have no boxes for them.
 
 ---
 
@@ -177,18 +178,31 @@ pip install -r requirements.txt
 source config/paths.sh
 ```
 
-That is the whole of it for labelling your own data. The three sections below
-are for reproducing the shipped results, and each says what it needs:
+That is enough to run [Labelling a new
+attribute](#labelling-a-new-attribute) on person crops, or on frames you already
+have boxes for. The three sections below cover the rest:
 
-| | needed for |
-|---|---|
-| the corpus | reproducing the numbers in [Results](#results) |
-| the identity adapter | `gender` and `age` only |
-| SAM 3 | building tracks from raw video |
+- **The corpus** — only to reproduce the numbers in [Results](#results). Your own
+  data does not go through it.
+- **The identity adapter** — only for `gender` and `age`. It was trained on those
+  two, so a new attribute gains nothing from it and runs on the base model.
+- **SAM 3** — builds tracks for identity attributes, and doubles as the detector
+  on raw video. Needed when your frames hold several people and you have no
+  boxes for them; not needed for a crop dataset, or when your own detector or
+  annotation already supplies boxes.
 
-None of the three is required by
-[Labelling a new attribute](#labelling-a-new-attribute), which runs on the base
-model over images you already have.
+### Check the parser
+
+Costs nothing and needs no GPU, no model download and no data:
+
+```bash
+bash label_attribute.sh --self-test
+```
+
+It runs the answer parser against a set of replies, including the shapes that
+used to fail silently, and prints `11/11 passed`. Worth doing the moment the
+environment is built, because it separates "my environment is wrong" from "the
+model answered badly" before either can be confused for the other.
 
 ### The corpus
 
@@ -215,10 +229,10 @@ bash setup/fetch_weights.sh --gdrive \
 
 The script unpacks it and prints the sha256 of both weight files. Check them:
 
-| file | size | sha256 |
-|---|---|---|
-| `adapter_model.safetensors` | 330.3 MB | `63dc9e9ec6df2b4ee100f84e3c5cdcbaef21952efc65d649c4e526cefb8af5c0` |
-| `non_lora_state_dict.bin` | 869.9 MB | `408e9eeb88df3985532cac345cd4970e0f700e785ba140c9df7cde1eec562ad3` |
+```
+63dc9e9ec6df2b4ee100f84e3c5cdcbaef21952efc65d649c4e526cefb8af5c0  adapter_model.safetensors   330.3 MB
+408e9eeb88df3985532cac345cd4970e0f700e785ba140c9df7cde1eec562ad3  non_lora_state_dict.bin     869.9 MB
+```
 
 A truncated download is otherwise indistinguishable from a complete one.
 
@@ -232,7 +246,18 @@ A truncated download is otherwise indistinguishable from a complete one.
 Without the adapter, unset `IDENTITY_ADAPTER` to run identity on the base model.
 The pipeline still works; the numbers drop.
 
-### SAM 3 — only for identity attributes
+### SAM 3 — for tracking, and for boxes you do not have
+
+Two jobs, and you may need neither:
+
+- In the shipped pipeline it builds the **tracks** that let K frames of one
+  person go into a single call, which only identity attributes use. Momentary
+  attributes take their boxes from the annotation file, so `--attrs "exposed
+  watched"` never loads it.
+- On your own raw video it is also the **detector**. `label_attribute.py` treats
+  a whole image as one subject unless you pass `--boxes`, so full frames with
+  several people need boxes from somewhere, whatever the attribute is. A crop
+  dataset needs none of this.
 
 Public, but the weights are gated.
 
@@ -287,12 +312,17 @@ frame_0002.jpg,frame_0002.jpg,1,False,ok
 
 What runs, and in what order:
 
-| | | |
-|---|---|---|
-| 0 | route | identity or momentary? if momentary, facial or not? Cached in `out/attr_routing.json`, so an attribute is asked about once |
-| 1 | prompt | in `config/prompt_registry.json` already → reuse the measured one. Otherwise write one from exemplars |
-| 2 | infer | momentary → one call per image, K=1, no tracking. identity → K frames of one subject in a single call |
-| 3 | write | `.json` with the routing, the prompt source and the raw text of any answer that failed; `.csv` with just the labels |
+**0. route** — identity or momentary, and if momentary, facial or not. Cached in
+`out/attr_routing.json`, so an attribute is asked about once.
+
+**1. prompt** — already in `config/prompt_registry.json`? Reuse the measured one.
+Otherwise write one from exemplars.
+
+**2. infer** — momentary runs one call per image at K=1 with no tracking;
+identity puts K frames of one subject into a single call.
+
+**3. write** — `.json` carries the routing, the prompt source and the raw text of
+every answer that failed. `.csv` carries just the labels.
 
 ### Check it before spending GPU time
 
@@ -428,15 +458,30 @@ export WATCHED_PROMPT="$TRACKPAR_ROOT/prompts/crop/svfd.txt"
 export WATCHED_STYLE=svfd      # parser: svfd's own schema
 ```
 
-`STYLE` is the part that is easy to get wrong. Use `meta` for a prompt you point
-at with a file: it reads the observation fields (`eyes`, `nose`, `mouth`,
-`gaze`) that the `prompts/crop/*` family emits, and the caller applies the rule.
-The other styles (`svfd`, `plain`, `trueonly`, `padq`) build their own prompt
-text and read their own schema, so `PROMPT` is ignored for them.
+`STYLE` is the part that is easy to get wrong. Each style is a matched pair of
+prompt text and the reader for the answers that text asks for:
 
-Mismatching the two fails quietly. The answer still parses as valid JSON; the
-fields the parser wants are simply absent, and the attribute comes back empty or
-always-false. Check the derive rate below after any swap.
+- **`meta`** — the only style that reads `PROMPT` from a file. It expects the
+  observation fields (`eyes`, `nose`, `mouth`, `gaze`) that the
+  `prompts/crop/*` family emits, and applies the rule in code afterwards. This
+  is the style to use for a prompt of your own.
+- **`svfd`** — builds its own text and reads its own schema, the graded
+  visibility tier. `PROMPT` is not read.
+- **`plain`**, **`trueonly`** — likewise self-contained; `PROMPT` is not read.
+- **`padq`** — self-contained, full scene with the target given as a box, one
+  attribute per call. `PROMPT` is not read.
+
+So there are two ways to get it wrong, and neither raises:
+
+- Pointing `PROMPT` at a new file while leaving `STYLE` on a self-contained
+  style. Your file is never opened and the old prompt runs.
+- Setting `STYLE=meta` with a prompt that answers in some other schema. The
+  answer parses as valid JSON, the fields the reader wants are absent, and the
+  attribute comes back empty or always-false.
+
+`setup/check_env.py` rejects an unknown `STYLE` and says plainly when `PROMPT`
+is not the file being read. Run it after any swap, then watch the derive rate
+below.
 
 The runner substitutes `{K}` for the frame count in `prompts/crop/*`, and `{n}` /
 `{bboxes}` in `prompts/padq/*`.

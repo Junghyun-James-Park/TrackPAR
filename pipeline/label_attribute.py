@@ -579,16 +579,15 @@ def main():
         a.model_id, dtype=torch.bfloat16, attn_implementation="sdpa",
         device_map="auto").eval()
     if a.adapter:
-        from peft import PeftModel
-        model = PeftModel.from_pretrained(model, a.adapter)
-        nl = os.path.join(a.adapter, "non_lora_state_dict.bin")
-        if os.path.exists(nl):
-            sd = torch.load(nl, map_location="cpu", weights_only=True)
-            model.base_model.model.load_state_dict(sd, strict=False)
-            print(f"  adapter + non_lora_state_dict ({len(sd)} tensors)")
-        else:
-            print("  adapter loaded WITHOUT non_lora_state_dict.bin — if the "
-                  "adapter shipped one, the vision tower is the base model's")
+        # Through attach_adapter, never PeftModel.from_pretrained directly.
+        # It strips the key prefixes the trainer wrote, loads the non-LoRA
+        # tensors BEFORE the LoRA wrapper renames the module tree, and raises if
+        # none of them land. Doing it by hand here reintroduced exactly the bug
+        # the rest of the repo documents: loaded after wrapping, with strict off,
+        # every tensor is dropped and nothing says so.
+        from rap2_eval import attach_adapter
+        model = attach_adapter(model, a.adapter)
+        print(f"  adapter attached: {a.adapter}")
 
     if routing is None:
         routing = route(a.attr, a.definition, model, proc)

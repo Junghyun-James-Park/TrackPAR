@@ -108,9 +108,22 @@ def main():
               "fine-tuned adapter, and nothing warns you")
 
     # --- prompts ----------------------------------------------------------
-    for var in ("EXPOSED_PROMPT", "WATCHED_PROMPT"):
-        p = os.environ.get(var, "")
-        check(f"{var} file", os.path.isfile(p), os.path.basename(p) or "(unset)")
+    # STYLE names the parser and PROMPT names the text, and they have to agree.
+    # A mismatch is the one failure here that produces no error at all: the model
+    # answers, the answer is valid JSON, the fields the parser wants are absent,
+    # and the attribute comes back empty. Cheaper to catch before the run.
+    STYLES = ("meta", "svfd", "plain", "trueonly", "padq")
+    for attr in ("EXPOSED", "WATCHED"):
+        style = os.environ.get(f"{attr}_STYLE", "")
+        p = os.environ.get(f"{attr}_PROMPT", "")
+        check(f"{attr}_STYLE is known", style in STYLES,
+              f"{style or '(unset)'} — expected one of {', '.join(STYLES)}")
+        note = ""
+        if style in STYLES and style != "meta":
+            note = (f" — note {attr}_STYLE={style} builds its own text, so this "
+                    f"file is not read")
+        check(f"{attr}_PROMPT file", os.path.isfile(p),
+              (os.path.basename(p) or "(unset)") + note)
 
     # --- every pipeline module imports ------------------------------------
     # A clone missing one file otherwise fails only when the run reaches it,

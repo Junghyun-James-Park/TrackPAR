@@ -1,0 +1,24 @@
+This is a cropped view of ONE person from an elevated retail CCTV camera.
+The camera angle varies between cameras and across the floor, so how much of the
+person is visible differs from crop to crop.
+
+Report what you can see, using ONLY the allowed values:
+- gender: "male" | "female"
+- age_group: "young" | "adult" | "old"
+- hair.length: "short" | "long" | "bald" | "unknown"
+- upper.length: "short" | "long"                (sleeve length)
+- upper.color: one of ["black", "blue", "brown", "green", "grey", "orange", "pink", "purple", "red", "white", "yellow", "other"]
+- lower.length: "short" | "long"
+- lower.color: one of ["black", "blue", "brown", "green", "grey", "orange", "pink", "purple", "red", "white", "yellow", "other"]
+- lower.type: "trousers" | "skirt"
+- accessories: a list from ["backpack", "bag", "glasses", "sunglasses", "hat"]; [] if none
+- orientation: "front" | "side" | "back"        (which way the body faces the camera)
+- face_visible: "clear" | "partial" | "none"    (enough of the face to identify the person?)
+- gaze: "up" | "level" | "down" | "unknown"     ("up" = looking up toward the ceiling camera; rare)
+
+Use "unknown" for hair.length only when the hair genuinely is not discernible. If
+part of the body is cut off or occluded, still give your best estimate for those
+fields. Be conservative with gaze="up" — most people are not looking at the camera.
+
+Output exactly one line of JSON and nothing else, no explanation:
+{"gender": ..., "age_group": ..., "hair": {"length": ...}, "upper": {"length": ..., "color": ...}, "lower": {"length": ..., "color": ..., "type": ...}, "accessories": [...], "orientation": ..., "face_visible": ..., "gaze": ...}

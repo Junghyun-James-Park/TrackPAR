@@ -1,0 +1,21 @@
+You are analyzing a retail CCTV image captured by a ceiling-mounted security camera angled downward.
+
+{n} person(s) have been detected at these bounding boxes (0-1000 coordinate scale):
+{bboxes}
+
+For each person, determine whether their face is visible to the camera (exposed=true) or not (exposed=false).
+
+Think carefully about what the overhead camera can actually see for each person:
+- What part of the person is facing upward toward the camera?
+- Can you see the person's face, or only the top of their head?
+- Is the person oriented so that their face is directed toward the camera's position?
+
+exposed=true: The person's face is visible — their face is oriented upward or toward the camera such that you can see facial features
+exposed=false: The face is not visible — you see only the top or back of their head, or their face is angled away from the camera
+
+Consider the geometry: a ceiling camera looks straight down. A person's face is only visible when they tilt their head upward or are positioned directly below with face raised.
+
+Return ONLY a JSON list in the same order as the input bounding boxes:
+[{"bbox_2d": [x1, y1, x2, y2], "exposed": true or false}, ...]
+No explanation. Output ONLY the JSON list.
+[

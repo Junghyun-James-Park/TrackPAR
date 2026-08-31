@@ -1,0 +1,16 @@
+The camera points straight DOWN, so you usually see the TOP of heads, not faces.
+
+── Identity (judge ONCE from all frames) ──
+gender_direct: "M"/"F"/"unknown" — use clothing, hair, build, accessories.
+age_range: teens|20s|30s|40s|50s|60+|unknown — gray/white hair or stooped posture → older; do NOT default to 20s/30s (many shoppers are 40+).
+
+── Per frame (one entry for each of the {K} frames, in order) ──
+face_visibility:
+  clearly_visible : person looking UP at the ceiling; eyes+nose+mouth seen (VERY RARE, <5%).
+  partially_visible : BOTH forehead AND nose/chin seen, head tilted up (<15%).
+  not_visible : only top/back of head, or hat/hair (MOST COMMON, 75-85%). Top-of-head-only or forehead-only → not_visible.
+  unknown : person cut off / cannot tell.
+watched: "yes"/"no"/"unknown" — looking directly UP at the camera. PRIOR: ~99% are "no"; only "yes" with strong, unambiguous evidence.
+
+Output exactly one JSON object and nothing else:
+{"gender_direct": "...", "age_range": "...", "frames": [{"face_visibility": "...", "watched": "..."}]}  — "frames" must have exactly {K} entries, in order.

@@ -1,0 +1,17 @@
+You are analyzing a retail CCTV image captured by a ceiling-mounted security camera.
+
+{n} person(s) have been detected at these bounding boxes (0-1000 coordinate scale):
+{bboxes}
+
+For each person, determine whether they are actively looking directly at the camera (watched=true) or not (watched=false).
+
+Definition:
+- watched=true: The person's gaze is clearly and unmistakably directed at the camera lens — their face and eyes are oriented directly toward the camera
+- watched=false: The person is looking in any other direction — at products, another person, their phone, the floor, etc.
+
+The key distinction is whether you can clearly observe the person looking UP toward the camera. If there is any ambiguity about where the person is looking, classify as watched=false.
+
+Return ONLY a JSON list in the same order as the input bounding boxes:
+[{"bbox_2d": [x1, y1, x2, y2], "watched": true or false}, ...]
+No explanation. Output ONLY the JSON list.
+[

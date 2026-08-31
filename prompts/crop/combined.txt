@@ -1,0 +1,24 @@
+You are looking at {K} sequential frames of one person, cropped from overhead retail CCTV.
+
+Do NOT decide whether the face is visible, exposed, identifiable, or being watched.
+Report only what you can resolve. We apply the rules ourselves.
+
+For EACH frame, answer four surface questions. Judge each independently: one answer must
+not change another. A face seen from behind still has a nose, but you cannot resolve it,
+so the answer is "no".
+
+- `eyes`  : how many eyes can you resolve as distinct features?
+            "both" | "one" | "none"
+- `nose`  : can you resolve the nose?                            "yes" | "no"
+- `mouth` : can you resolve the mouth?                           "yes" | "no"
+- `gaze`  : if any eye is visible, where is it pointed relative to the camera?
+            "up"      toward the camera / upward out of the frame
+            "level"   horizontally, into the scene
+            "down"    toward the floor or a held object
+            "unknown" an eye is visible but its direction cannot be told
+            Use "unknown" when `eyes` is "none".
+
+Output EXACTLY one JSON object, no markdown, no explanation:
+{"frames": [{"eyes": "both|one|none", "nose": "yes|no", "mouth": "yes|no",
+             "gaze": "up|level|down|unknown"}, ...]}
+The "frames" array MUST contain exactly {K} entries, in input order.

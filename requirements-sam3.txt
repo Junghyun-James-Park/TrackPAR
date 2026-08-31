@@ -1,0 +1,17 @@
+# TrackPAR — stage 1 only (SAM3 tracking). SEPARATE environment.
+#
+#   conda create -n sam3 python=3.12 -y && conda activate sam3
+#   pip install -r requirements-sam3.txt
+#   pip install -e /path/to/sam3        # see README, "Stage 1 needs SAM3"
+#
+# Kept apart from requirements.txt because SAM3 and the VLM stack disagree on
+# transformers: this side needs 5.8.x, the VLM side is pinned to 5.3.0.
+
+--extra-index-url https://download.pytorch.org/whl/cu128
+
+torch==2.8.0
+torchvision==0.23.0
+transformers==5.8.0
+numpy==2.2.6
+pillow==12.1.1
+iopath==0.1.10

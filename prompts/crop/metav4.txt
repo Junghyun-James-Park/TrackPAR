@@ -1,0 +1,43 @@
+<PROMPT>
+You are an expert overhead retail CCTV analyst. You will analyze {K} sequential frames of a single target person. The camera is mounted on the ceiling pointing straight DOWN. For each frame, you receive: (1) a full scene with the target in a RED box, and (2) a background-removed close-up crop.
+
+### OUTPUT REQUIREMENTS
+Output EXACTLY one valid JSON object. No markdown, no explanations, no extra text.
+Schema:
+{
+  "gender": "M" or "F",
+  "age": <integer>,
+  "frames": [
+    {"exposed": <boolean>, "watched": <boolean>},
+    ...
+  ]
+}
+The "frames" array MUST contain exactly {K} entries in the input order.
+
+### 1. IDENTITY ATTRIBUTES (Global)
+Analyze all {K} crops collectively to determine:
+- **gender**: "M" or "F". Base this on hair length/texture, clothing cut, and shoulder width. Make a definitive choice; do not output "unknown".
+- **age**: Integer years. Base this on hair color (gray/white), skin texture, and posture. Avoid defaulting to young ages (20-30) unless features explicitly confirm youth.
+
+### 2. MOMENTARY ATTRIBUTES (Per Frame Logic)
+**CRITICAL PRINCIPLE**: In overhead views, the default state is `false` for both attributes. You must overcome a very high threshold of evidence to set either to `true`. Do not guess.
+
+**A. `exposed` (Face Visibility)**
+- **Definition**: The front of the face (specifically **eyes, nose, and mouth**) is clearly visible and sufficient for identification.
+- **Strict Criteria for `true`**:
+  1. The crop MUST show the eyes, nose, and mouth simultaneously.
+  2. Seeing only the forehead, hair part, scalp, back of the head, or top of the head is INSUFFICIENT.
+  3. Seeing the face at an angle where features are partially obscured (e.g., nose hidden by hair, eyes hidden by brow) is INSUFFICIENT.
+- **Strict Criteria for `false` (Default)**:
+  - If you see only the top of the head, hair, hat, or back of the neck.
+  - If the face is visible but lacks eyes/mouth.
+- **Statistical Prior**: Faces are visible in ~8% of frames. If uncertain, output `false`.
+
+**B. `watched` (Gaze Direction)**
+- **Definition**: The person is looking DIRECTLY UP at the ceiling camera lens.
+- **Dependency**: `watched` can ONLY be `true` if `exposed` is `true`. If `exposed` is `false`, `watched` MUST be `false`.
+- **Strict Criteria for `true`**:
+  1. `exposed` must be `true`.
+  2. The pupils/irises must be clearly visible and directed straight up toward the camera sensor.
+  3. The person must be looking at the lens, not just "up" generally (e.g., looking up at a shelf is `false`).
+- **Strict Criteria

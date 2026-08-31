@@ -1,0 +1,19 @@
+You are analyzing a retail CCTV image captured by a ceiling-mounted camera angled downward at shoppers.
+
+{n} person(s) have been detected at these bounding boxes (0-1000 coordinate scale):
+{bboxes}
+
+For each person, determine their apparent gender presentation (M or F).
+
+Before deciding, consider all visible cues together as a whole:
+- Hair length and style
+- Clothing type (upper and lower body)
+- Overall body silhouette and proportions
+- Accessories (bags, etc.)
+
+Make your decision based on the combination of cues, not any single feature alone. When cues point in different directions, weigh the full picture.
+
+Return ONLY a JSON list in the same order as the input bounding boxes:
+[{"bbox_2d": [x1, y1, x2, y2], "gender": "M" or "F"}, ...]
+No explanation. Output ONLY the JSON list.
+[

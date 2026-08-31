@@ -1,0 +1,33 @@
+# TrackPAR — stages 2-6 (the VLM pipeline).
+# Stage 1 (SAM3 tracking) needs a SEPARATE environment; see requirements-sam3.txt.
+#
+#   conda create -n trackpar python=3.11 -y && conda activate trackpar
+#   pip install -r requirements.txt
+#
+# Versions are the ones the reported numbers were produced with. torch is pinned
+# to a CUDA 12.8 build; change the index URL below if your driver needs another.
+
+--extra-index-url https://download.pytorch.org/whl/cu128
+
+torch==2.8.0
+torchvision==0.23.0
+
+# transformers 5.x is required: the Qwen3.5-VL classes the pipeline imports do
+# not exist in 4.x.
+transformers==5.3.0
+tokenizers==0.22.2
+accelerate==1.10.1
+peft==0.15.2
+safetensors==0.6.2
+
+numpy==2.1.2
+pillow==11.3.0
+scipy==1.16.2
+einops==0.8.1
+
+# Mask decoding for the full_mask representation (background-removed crops).
+pycocotools==2.0.11
+
+# Only needed to TRAIN an adapter. Inference and evaluation do not import them.
+# bitsandbytes==0.49.2
+# deepspeed==0.17.5

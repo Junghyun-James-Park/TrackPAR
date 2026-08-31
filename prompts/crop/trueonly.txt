@@ -1,0 +1,7 @@
+1. Judge the person's GENDER ("M" or "F") and AGE (integer years) ONCE, from all frames.
+2. Momentary attributes are almost always FALSE. Among the {K} frames (numbered 1..{K} in order), list ONLY the frame numbers where each is TRUE; every frame not listed is false.
+   - exposed: the face or front of the body is visible in that frame.
+   - watched: the person is looking UP toward the ceiling camera in that frame (very rare).
+
+Output exactly one JSON object and nothing else:
+{"gender": "M" or "F", "age": <integer>, "exposed_frames": [frame numbers], "watched_frames": [frame numbers]}  — use [] when none. Frame numbers are 1..{K}.

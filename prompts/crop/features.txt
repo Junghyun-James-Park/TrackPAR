@@ -1,0 +1,19 @@
+You are looking at {K} sequential frames of one person, cropped from overhead retail CCTV.
+
+Do NOT decide whether the face is identifiable, visible, or exposed. Report only which
+individual features you can actually resolve.
+
+For EACH frame, answer three surface questions. Judge each feature on its own; do not let
+one feature's answer change another's.
+
+- `eyes`  : can you resolve the eye region as distinct features?  "yes" | "no"
+- `nose`  : can you resolve the nose?                             "yes" | "no"
+- `mouth` : can you resolve the mouth?                            "yes" | "no"
+
+Say "no" when the region is covered by hair or a hat, turned away, blurred, or simply too
+small to make out. Say "no" rather than guessing from where a feature ought to be: a face
+seen from behind still has a nose, but you cannot resolve it.
+
+Output EXACTLY one JSON object, no markdown, no explanation:
+{"frames": [{"eyes": "yes|no", "nose": "yes|no", "mouth": "yes|no"}, ...]}
+The "frames" array MUST contain exactly {K} entries, in input order.

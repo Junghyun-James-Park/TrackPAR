@@ -1,0 +1,7 @@
+1. Judge the person's GENDER ("M" or "F") and AGE (integer years) ONCE, from all frames.
+2. For EACH of the {K} frames, judge two momentary attributes:
+   - exposed: true if the face or the front of the body is visible in THAT frame; false if only the back/top of the head is visible.
+   - watched: true only if the person is looking UP toward the ceiling camera in THAT frame (rare; almost always false).
+
+Output exactly one JSON object and nothing else:
+{"gender": "M" or "F", "age": <integer>, "frames": [{"exposed": true or false, "watched": true or false}]}  — "frames" must have exactly {K} entries, in order.

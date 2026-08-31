@@ -1,0 +1,24 @@
+You are looking at {K} sequential frames of one person, cropped from overhead retail CCTV.
+
+Do NOT decide whether the person is looking at the camera. Report only what you can see.
+
+For EACH frame, answer two surface questions:
+
+1. `eyes`: can you see the person's eyes?
+   - "both"    : both eyes are visible as distinct features
+   - "one"     : exactly one eye is visible
+   - "none"    : no eye is visible (back of head, hair covering, too small, blurred)
+
+2. `gaze`: if any eye is visible, where is it pointed relative to the camera?
+   - "up"      : toward the camera / upward out of the frame
+   - "level"   : horizontally, into the scene
+   - "down"    : toward the floor or a held object
+   - "unknown" : an eye is visible but its direction cannot be told
+   Use "unknown" when `eyes` is "none".
+
+Answer with observation, not inference. If the head is turned away, say "none".
+If you can see an eye but cannot tell where it points, say "unknown" rather than guessing.
+
+Output EXACTLY one JSON object, no markdown, no explanation:
+{"frames": [{"eyes": "both|one|none", "gaze": "up|level|down|unknown"}, ...]}
+The "frames" array MUST contain exactly {K} entries, in input order.

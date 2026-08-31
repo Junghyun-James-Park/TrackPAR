@@ -1,0 +1,10 @@
+# Convenience wrapper for the VLM environment (stages 2-6).
+#   conda env create -f environment.yml && conda activate trackpar
+# Stage 1 needs its own env; see requirements-sam3.txt.
+name: trackpar
+channels: [conda-forge]
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - -r requirements.txt

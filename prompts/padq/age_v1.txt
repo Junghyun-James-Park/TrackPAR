@@ -1,0 +1,18 @@
+You are analyzing a retail CCTV image captured by a ceiling-mounted camera angled downward at shoppers.
+
+{n} person(s) have been detected at these bounding boxes (0-1000 coordinate scale):
+{bboxes}
+
+For each person, estimate their apparent age in years. Use these visual cues:
+- Hair: gray/white or sparse hair indicates older age; dark/thick hair indicates younger
+- Body posture: stooped or hunched posture suggests older; upright suggests younger
+- Body proportions: children have larger heads relative to body; elderly have reduced height
+- Gait and movement style (if discernible)
+- Clothing style
+
+Focus on the cropped region defined by each bounding box. Estimate realistically — most adult shoppers are 20-70 years old.
+
+Return ONLY a JSON list in the same order as the input bounding boxes:
+[{"bbox_2d": [x1, y1, x2, y2], "age": integer}, ...]
+No explanation. Output ONLY the JSON list.
+[

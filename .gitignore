@@ -1,0 +1,10 @@
+# Fetched, not committed (~1.2 GB).
+weights/
+
+# Everything a run produces.
+out/
+*.log
+
+__pycache__/
+*.pyc
+.ipynb_checkpoints/

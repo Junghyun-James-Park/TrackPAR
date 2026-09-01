@@ -114,34 +114,20 @@ need neither the tracker nor its gated weights.
 **Stage 0 is cached.** An attribute is routed once and stored in
 `out/attr_routing.json`. Re-running never re-asks.
 
-**What the router is told, and why.** It is not asked whether an attribute can
-change in the abstract — asked that way it routes clothing colour and eyeglasses
-to momentary, because in principle they can, and it answers differently
-depending on which other attributes are in the same batch. It is told the
-deployment window instead: the camera is fixed and a person crosses it in
-seconds, so a **state they arrived with** (clothing, colour, hair, a bag, a hat)
-is identity, while an **action they are performing** (carrying, holding,
-pushing, talking) is momentary.
+**What the router is told.** Not whether an attribute can change in the
+abstract — asked that way it sends clothing colour and eyeglasses to the
+momentary branch, because in principle they can. It is told the deployment
+window: the camera is fixed and a person crosses it in seconds, so a **state
+they arrived with** (clothing, colour, hair, a bag, a hat) is identity, while an
+**action they are performing** (carrying, holding, pushing, talking) is
+momentary.
 
-The two mistakes are not equally bad, which is what sets those defaults. Calling
-a stable attribute momentary costs extra model calls and nothing else: the
-per-frame answers agree and collapse back into one by majority vote. Calling a
-changing attribute identity cannot be undone — it was never observed per frame,
-so a value that did move leaves one answer for the whole track, wrong for part
-of it, with nothing recording that.
-
-Measured on three checks, with `exposed`/`watched` required to stay momentary
-and `gender`/`age` to stay identity:
-
-| check | original | + window | + action carve-out |
-|---|---|---|---|
-| 20 boundary cases | 12/20 | 17/20 | **20/20** |
-| RAP v2's 9 actions, routed momentary | 9/9 | 0/9 | **9/9** |
-| the 40 benchmark attributes, routed identity | 40/40 | 40/40 | **40/40** |
-
-These measure agreement with a hand-written intent, not accuracy. There is no
-ground truth for the question; see `docs/FINAL_REPORT.md` §1 for why RAP v2
-cannot supply one.
+The defaults are set by which mistake is recoverable. Calling a stable attribute
+momentary costs extra model calls and nothing else: the per-frame answers agree
+and collapse back into one by majority vote. Calling a changing attribute
+identity cannot be undone — it was never observed per frame, so a value that did
+move leaves one answer for the whole track, wrong for part of it, with nothing
+recording that.
 
 ### What stage 0 does with a new attribute
 

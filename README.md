@@ -492,6 +492,13 @@ Every stage skips itself when its output exists, so an interrupted run resumes.
 
 Set `TRACKPAR_GPUS="0,1"` for the two cards to use. Stage 5 shards across both.
 
+`--attrs` chooses among the four attributes this script implements. It does not
+make it label a new one: stages 3 to 5 name `gender`, `age`, `exposed` and
+`watched` directly, and `--attrs` only decides which of them to run and whether
+the tracker is needed at all. Any other name is refused, with a pointer to
+[`label_attribute.sh`](#labelling-a-new-attribute), which is where one attribute
+on your own data belongs.
+
 ### Changing which prompt an attribute uses
 
 Prompts are plain text files, and each one is paired with the parser that reads

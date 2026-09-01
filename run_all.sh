@@ -57,6 +57,25 @@ while [ $# -gt 0 ]; do
 done
 
 say() { echo "=== [$(date '+%H:%M:%S')] $*"; }
+
+# --attrs selects among the four attributes this script implements; it does not
+# make it label a new one. Stages 3-5 name gender, age, exposed and watched
+# directly. Without this check, `--attrs my_attr` routed my_attr, ran the four
+# shipped attributes anyway, and exited 0 — the wrong labels, reported as a
+# success. One attribute on your own data is label_attribute.sh.
+for _a in $ATTRS; do
+  case "$_a" in
+    gender|age|exposed|watched) ;;
+    *) echo "run_all.sh does not label '$_a'."
+       echo "It runs the four attributes it was built and measured on:"
+       echo "  gender age exposed watched"
+       echo
+       echo "For any other attribute, on your own images or video:"
+       echo "  bash label_attribute.sh --attr $_a --definition '<one sentence>' \\"
+       echo "      --images /path/to/frames"
+       exit 1 ;;
+  esac
+done
 want() {
   local order=(route track fragments gender age momentary merge) w=-1 h=-1 i=0
   for s in "${order[@]}"; do

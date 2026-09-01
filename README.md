@@ -461,9 +461,12 @@ one model for everything.
 names the exposed/watched parser reads as a schema signal. The runner refuses
 them rather than guessing — use `eyes_closed` rather than `eyes`.
 
-`exposed` and `watched` are accepted and take a different path: they have
-measured prompts in the registry, and the runner defers to the one those numbers
-came from.
+**`exposed` and `watched` do not work here** — use
+[`run_all.sh`](#running-the-shipped-pipeline) for those. Their measured prompts
+answer with observations (`eyes`, `gaze`) and the label is derived from those in
+code; this runner reads answers by looking for a field named after the
+attribute, which such an answer does not contain. Every row comes back unusable.
+The runner says so before it starts.
 
 ---
 

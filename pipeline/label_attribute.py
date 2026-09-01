@@ -29,9 +29,14 @@ prompt cannot answer under a name the parser is not looking for. This also keeps
 generated prompts clear of the field names `eyes`, `nose`, `mouth` and `gaze`,
 which the exposed/watched parser treats as a schema signal.
 
-`exposed` and `watched` are different: they have measured prompts in the
-registry, and for them this script defers to the path those numbers came from,
-so the published figures reproduce.
+`exposed` and `watched` do NOT work here. Use run_all.sh for those.
+
+Their measured prompts answer with observations — eyes, gaze — and the label is
+derived from those in code by exp20_unified_infer.parse_unified. This script
+reads answers by looking for a field named after the attribute, which such an
+answer does not contain, so every row comes back "no-field" and the attribute is
+empty. The two readers are not interchangeable and this script only has one of
+them.
 
 Input formats
 -------------
@@ -631,8 +636,15 @@ def main():
                              a.regenerate, a.prompt_model)
     registry_path = src == "registry"
     if registry_path and a.attr in ("exposed", "watched"):
-        print("  This attribute has a measured prompt, so the run below uses "
-              "the field names those measurements were made with.")
+        # Loud, because the failure downstream is quiet: the prompt loads, the
+        # model answers, the answers parse, and every one of them is unusable.
+        print("\n  WARNING: this prompt reports observations (eyes, gaze) and "
+              "leaves the")
+        print("  label to be derived in code. This runner reads answers by "
+              "looking for a")
+        print(f"  field called '{a.attr}', which is not in them, so every row "
+              f"will come back")
+        print("  unusable. Use run_all.sh for exposed and watched.\n")
 
     print(f"\n[3/3] inference — {routing['kind']}", flush=True)
     import exp20_unified_infer as X

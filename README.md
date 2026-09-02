@@ -40,6 +40,22 @@ several people and you have no boxes for them.
 
 ---
 
+## Contents
+
+| | |
+|---|---|
+| [How the pipeline is shaped](#how-the-pipeline-is-shaped) | one question per attribute decides everything else |
+| [Setup](#setup) | install, and which pieces each path needs |
+| [Labelling a new attribute](#labelling-a-new-attribute) | your attribute, your images or video, one command |
+| [Running the shipped pipeline](#running-the-shipped-pipeline) | reproduce the four attributes this was built on |
+| [The prompts, and the ideas behind them](#the-prompts-and-the-ideas-behind-them) | what each prompt tries, and why |
+| [Results](#results) | against a naive baseline, and every prompt measured |
+| [Layout](#layout) | what is in which file |
+| [Scoring caveat](#scoring-caveat) | read this before scoring the whole corpus |
+| [Data terms](#data-terms) | what may and may not be redistributed |
+
+---
+
 ## How the pipeline is shaped
 
 Everything follows from one question asked once per attribute: **is this a
@@ -587,6 +603,59 @@ It also needs no crop and no track: a frame and its boxes are enough.
 <a id="results"></a>
 
 ## Results
+
+### Against a naive baseline
+
+The same model, asked the same question without any of the pipeline. The
+baseline is `Qwen3.5-9B` with no adapter for identity, and the `plain` prompt —
+the attribute name and a one-line definition — for momentary.
+
+**identity**, 349 held-out tracks (age over the 338 with a non-zero ground-truth
+age), K=4 frames in one call:
+
+| attribute | pipeline | naive base 9B | metric |
+|---|---|---|---|
+| gender | **0.9456** | 0.8911 | accuracy |
+| age | **3.63** | 10.90 | MAE years |
+
+Read the age row against the best single constant guess, which scores **10.46**.
+The base model is worse than that, so without fine-tuning it does not read age at
+all; the pipeline's 3.63 is the whole of the signal.
+
+**momentary**, 4 annotated sessions, 5,168 instances, one call per frame:
+
+| attribute | arm | F1 | 95% CI | bAcc | predicted+ | true rate |
+|---|---|---|---|---|---|---|
+| exposed | pipeline `eyes` | **0.689** | [0.669, 0.708] | 0.799 | 30.9% | 26.2% |
+| | naive `plain` | 0.515 | [0.496, 0.532] | 0.666 | 68.1% | 26.2% |
+| watched | pipeline `svfd` | **0.740** | [0.690, 0.784] | 0.888 | 4.4% | 3.9% |
+| | naive `plain` | 0.259 | [0.186, 0.328] | 0.580 | 1.0% | 3.9% |
+
+The baseline fails in opposite directions on the two attributes, and the
+`predicted+` column is where you see it: it calls 68.1% of instances `exposed`
+against a true 26.2%, and 1.0% `watched` against a true 3.9%. Neither is a
+failure to see the attribute. Both are the threshold coming from the prompt
+rather than from the image.
+
+### What the unannotated sessions do to these numbers
+
+Scored over the deployment run rather than the evaluation grid, so the sample
+differs from the table above and the two must not be compared directly. What is
+comparable is the left column against the right, both from the same run:
+
+| attribute | 4 annotated sessions | all 11 sessions |
+|---|---|---|
+| exposed | 0.702  (n=555, true 33.0%) | **0.267**  (n=1,742, true 10.6%) |
+| watched | 0.636  (n=889, true 2.9%) | 0.500  (n=2,700, true 1.0%) |
+
+`exposed` falls from 0.702 to 0.267 and the true rate falls with it, 33.0% to
+10.6%. That is not the model getting worse on unseen sessions. Seven of the
+eleven sessions record `exposed=False` on every row and that value is wrong, so
+the right-hand column measures the annotation and not the pipeline. It is here
+because the drop is large enough to mislead anyone who scores the whole corpus
+without knowing. See [Scoring caveat](#scoring-caveat).
+
+### Every prompt, on the annotated sessions
 
 Measured over **every annotated instance of the four annotated sessions**: 5,168
 instances, 1,353 `exposed` positives, 201 `watched` positives. Intervals are 95%

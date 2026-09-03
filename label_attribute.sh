@@ -24,9 +24,11 @@ source "$ROOT/config/paths.sh"
 export PYTHONPATH="$ROOT/pipeline:$ROOT/eval:$ROOT/src:${PYTHONPATH:-}"
 mkdir -p "$TRACKPAR_OUT"
 
-# One card is enough: this path runs K=1 for momentary attributes and one call
-# per subject for identity ones, so there is nothing to shard.
-IFS=',' read -r G0 _ <<< "$TRACKPAR_GPUS"
+# Both cards are exposed even though the labelling model fits on one. The writer
+# that produces rules and prompts is larger and needs the pair; the labelling
+# model is pinned to the first card inside the runner so it does not spread and
+# slow itself down. With a single card visible, loading the writer beside a
+# resident labelling model offloads it to CPU and the run stalls without erroring.
 
 # --self-test needs no GPU and no model, so it skips the pre-flight below.
 for arg in "$@"; do
@@ -46,6 +48,6 @@ if not h or not os.access(h, os.W_OK):
 print(f"  HF_HOME {h}")
 PY
 
-echo "=== [$(date '+%H:%M:%S')] labelling on GPU $G0"
-CUDA_VISIBLE_DEVICES="$G0" python -u "$ROOT/pipeline/label_attribute.py" "$@"
+echo "=== [$(date '+%H:%M:%S')] labelling on GPU(s) $TRACKPAR_GPUS"
+CUDA_VISIBLE_DEVICES="$TRACKPAR_GPUS" python -u "$ROOT/pipeline/label_attribute.py" "$@"
 echo "=== [$(date '+%H:%M:%S')] done"

@@ -280,6 +280,44 @@ def identity_body(attr, definition):
             "view settles it, answer false.")
 
 
+# --------------------------------------------------------- stage 3-5, rules
+def synthesis_branch(routing):
+    """Which attributes are labelled by a rule rather than by a prompt.
+
+    identity and facial momentary compose from the stage 1 observation fields;
+    non-facial does not, because nothing in that vocabulary names an action. The
+    split is measured, not assumed: on facing_camera and facing_away a rule beat
+    a generated prompt, a one-line definition and a hand-written prompt, all six
+    paired intervals separated. On the five action attributes it did not.
+    """
+    return routing["kind"] == "identity" or routing.get("facial") == "facial"
+
+
+def get_rule(attr, definition, routing, prompt_model, vocab=None):
+    """Write and validate a rule. Returns (rule, info); rule is None only when
+    three tries all failed validation, which sends the attribute to a prompt."""
+    import make_rule as MR
+    import torch
+    from transformers import AutoModelForImageTextToText, AutoProcessor
+    reg = json.load(open(REGISTRY))
+    known = (reg.get("synthesis") or {}).get(attr)
+    if known and known.get("rule"):
+        print(f"  registry: rule already recorded for {attr}")
+        print(f"            {known.get('measured', '')}")
+        return known["rule"], {"tries": 0, "confidence": known.get("confidence"),
+                               "n_distinct": None, "from_registry": True}
+    gid = prompt_model or os.environ.get("PROMPT_MODEL", "Qwen/Qwen3.5-27B")
+    print(f"  writing a rule with {gid}  (text only, no images)", flush=True)
+    gproc = AutoProcessor.from_pretrained(gid)
+    gmodel = AutoModelForImageTextToText.from_pretrained(
+        gid, dtype=torch.bfloat16, attn_implementation="sdpa",
+        device_map="auto").eval()
+    rule, info = MR.make_rule(attr, definition, gmodel, gproc, vocab=vocab)
+    del gmodel, gproc
+    torch.cuda.empty_cache()
+    return rule, info
+
+
 # ------------------------------------------------------------------ stage 1
 def get_prompt(attr, definition, routing, model, proc, force_regen=False,
                prompt_model=None):
@@ -549,6 +587,9 @@ def main():
                          "gender and age only; leave unset for a new attribute")
     ap.add_argument("--regenerate", action="store_true",
                     help="write a new prompt even if one is cached")
+    ap.add_argument("--force-prompt", action="store_true",
+                    help="skip the rule path and write a prompt, even for a "
+                         "branch that composes. For comparing the two")
     ap.add_argument("--out", default=None, help="path stem for .json and .csv")
     ap.add_argument("--self-test", action="store_true",
                     help="check the parser, no GPU")
@@ -612,9 +653,12 @@ def main():
     import torch
     from transformers import AutoModelForImageTextToText, AutoProcessor
     proc = AutoProcessor.from_pretrained(a.model_id)
+    # Pinned to the first visible card rather than device_map="auto". Both cards
+    # are exposed so the larger writer can use the pair, but a single-stream
+    # labelling model spread over two of them leaves each about a third busy.
     model = AutoModelForImageTextToText.from_pretrained(
         a.model_id, dtype=torch.bfloat16, attn_implementation="sdpa",
-        device_map="auto").eval()
+        device_map={"": 0}).eval()
     if a.adapter:
         # Through attach_adapter, never PeftModel.from_pretrained directly.
         # It strips the key prefixes the trainer wrote, loads the non-LoRA
@@ -631,9 +675,32 @@ def main():
         if routing is None:
             return 1
 
-    print("\n[2/3] prompt")
-    prompt, src = get_prompt(a.attr, a.definition, routing, model, proc,
-                             a.regenerate, a.prompt_model)
+    # ---- stage 3-5: a rule when the branch composes, a prompt otherwise ----
+    rule = rule_info = None
+    if synthesis_branch(routing) and not a.force_prompt:
+        print("\n[2/3] rule")
+        rule, rule_info = get_rule(a.attr, a.definition, routing, a.prompt_model)
+        if rule is None:
+            print(f"  no valid rule after {rule_info['tries']} tries — "
+                  f"falling back to a prompt")
+        else:
+            import synthesise as SY
+            print(f"  {a.attr} := {SY.describe_rule(rule)}")
+            print(f"  confidence {rule_info['confidence']}"
+                  + (f"  ({rule_info['n_distinct']} distinct rules over "
+                     f"{rule_info['n_samples']} samples)"
+                     if rule_info.get('n_distinct') else ""))
+            if rule_info["confidence"] == "low":
+                print("  LOW CONFIDENCE — the writer gave a different rule each "
+                      "time it was asked.")
+                print("  The labels still ship, flagged, so a reviewer can start "
+                      "there.")
+
+    prompt = src = None
+    if rule is None:
+        print("\n[2/3] prompt")
+        prompt, src = get_prompt(a.attr, a.definition, routing, model, proc,
+                                 a.regenerate, a.prompt_model)
     registry_path = src == "registry"
     if registry_path and a.attr in ("exposed", "watched"):
         # Loud, because the failure downstream is quiet: the prompt loads, the
@@ -681,6 +748,39 @@ def main():
     rows, stat, t0 = [], {}, time.time()
     for i, (tid, us) in enumerate(jobs, 1):
         imgs = [load_subject(u) for u in us]
+
+        if rule is not None:
+            # Stage 2 first, then the rule. The extraction is the only thing the
+            # model is asked, and it is asked once whatever the attribute is —
+            # which is why a second attribute on the same data costs a rule and
+            # nothing else. Not cached here yet; run_all reuses a stored
+            # extraction, and this path re-reads the image per attribute.
+            import synthesise as SY
+            import tvlm_pseudo_subattr as tv
+            raw, _, _ = X.gen_with_tokens(model, proc, imgs, tv.PROMPT,
+                                          model.device, 320)
+            obs = tv.parse_json(raw)
+            if not isinstance(obs, dict):
+                val, st = None, "no-json"
+            else:
+                val = SY.apply_rule(rule, obs)
+                st = "ok" if isinstance(val, bool) else "no-field"
+            stat[st] = stat.get(st, 0) + 1
+            rows.append({"subject": tid,
+                         "image": os.path.relpath(us[0]["image"], base_dir)
+                         if base_dir else us[0]["image"],
+                         "n_frames": len(us),
+                         a.attr: val,
+                         "status": st,
+                         "confidence": rule_info["confidence"],
+                         "subattr": obs,
+                         "raw": raw[:200] if st != "ok" else ""})
+            if i % 25 == 0 or i == len(jobs):
+                el = time.time() - t0
+                print(f"  {i}/{len(jobs)}  {el/i:.1f}s each  "
+                      f"eta {(len(jobs)-i)*el/i/60:.0f} min", flush=True)
+            continue
+
         body = prompt.replace("{K}", str(len(imgs)))
         if "{n}" in body:
             body = body.replace("{n}", str(len(imgs)))
@@ -728,17 +828,30 @@ def main():
 
     with open(stem + ".json", "w") as f:
         json.dump({"attribute": a.attr, "definition": a.definition,
-                   "routing": routing, "prompt_source": src,
+                   "routing": routing,
+                   "method": "synthesis" if rule is not None else "prompt",
+                   "rule": rule,
+                   "confidence": (rule_info or {}).get("confidence"),
+                   "prompt_source": src,
                    "field": field, "units": n, "usable": usable,
                    "counts": stat, "results": rows}, f, indent=1,
                   ensure_ascii=False)
     cols = ["subject", "image", "n_frames", a.attr, "status"]
+    if rule is not None:
+        cols.append("confidence")
     with open(stem + ".csv", "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
         w.writeheader()
         w.writerows(rows)
     print(f"\n  wrote {stem}.json and {stem}.csv")
-    if src.startswith("generated"):
+    if rule is not None:
+        import synthesise as SY
+        print("  Labels were derived from a rule over the observation fields, "
+              "not from a prompt")
+        print(f"  written for this attribute: {SY.describe_rule(rule)}")
+        if rule_info["confidence"] == "low":
+            print("  Confidence is low — start a review here.")
+    elif src and src.startswith("generated"):
         print("  The prompt was generated and has not been scored against "
               "ground truth. Treat these labels as a first pass.")
     return 0

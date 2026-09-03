@@ -62,26 +62,59 @@ Everything follows from one question asked once per attribute: **is this a
 property of the person, or a property of the frame?**
 
 ```
-                    ┌─────────────────────────────┐
-   attribute ──────▶│ 0. route   (VLM, cached)    │
-                    └──────────────┬──────────────┘
-                      identity     │    momentary
-               ┌───────────────────┴───────────────────┐
-               ▼                                       ▼
-   ┌───────────────────────┐             ┌─────────────────────────────┐
-   │ 1. SAM 3 tracking     │             │ no tracking: the boxes      │
-   │ 2. fragments          │             │ come straight from the      │
-   │ 3. gender   K=4       │             │ annotation file             │
-   │ 4. age      K=4       │             │                             │
-   │                       │             │ facial / non-facial         │
-   │                       │             │   selects the prompt        │
-   │ one answer per TRACK  │             │ 5. one call per FRAME       │
-   │                       │             │    one answer per FRAME     │
-   └───────────┬───────────┘             └─────────────┬───────────────┘
-               └───────────────────┬───────────────────┘
-                                   ▼
-                        6. merge → labels.json
+                      attribute + definition + data
+                                    │
+                    ┌───────────────┴───────────────┬──────────────────┐
+                    ▼                               ▼                  ▼
+                identity                 momentary / facial   momentary / non-facial
+                    │                               │                  │
+              tracks (SAM 3                         │                  │
+              if not given)                         │                  │
+                    │                               │                  │
+                    └───────────────┬───────────────┘                  │
+                                    ▼                                  │
+                    ┌───────────────────────────────┐                  │
+                    │ EXTRACT observation fields    │                  │
+                    │   one call, every attribute   │                  │
+                    └───────────────┬───────────────┘                  │
+                                    ▼                                  ▼
+                    ┌───────────────────────────────┐  ┌───────────────────────────┐
+                    │ WRITE A RULE over those       │  │ WRITE A PROMPT            │
+                    │ fields                        │  │                           │
+                    └───────────────┬───────────────┘  └─────────────┬─────────────┘
+                                    ▼                                ▼
+                    ┌───────────────────────────────┐  ┌───────────────────────────┐
+                    │ VALIDATE ◀── retry 3x, told   │  │ VALIDATE ◀── retry 3x     │
+                    │   which field or value is bad │  │                           │
+                    └────────┬──────────────┬───────┘  └───────┬──────────────┬────┘
+                             │ pass         │ 3x fail          │ 3x fail      │ pass
+                             ▼              └────────┐  ┌──────┘              │
+                    ┌───────────────────┐            ▼  ▼                     │
+                    │ SYNTHESISE        │   ┌──────────────────────┐          │
+                    │   apply the rule  │   │ definition one-liner │          │
+                    │   to the stored   │   └──────────┬───────────┘          │
+                    │   fields          │              └───────┬──────────────┘
+                    │   no model call   │                      ▼
+                    └─────────┬─────────┘        ┌───────────────────────────┐
+                              │                  │ INFER                     │
+                              │                  │   one call per frame      │
+                              │                  │   per attribute           │
+                              │                  └─────────────┬─────────────┘
+                              └────────────┬───────────────────┘
+                                           ▼
+                              labels.json  +  labels.csv
 ```
+
+**One extraction serves every attribute.** The model is asked what it can see —
+orientation, face visibility, garment colour, what is being carried — and that
+answer is stored. An attribute is then a rule over those fields, so the second
+attribute on the same data costs a rule and no inference at all. Measured on
+`facing_camera` and `facing_away`, 1,000 RAP v2 test images each: F1 0.735 and
+0.751, ahead of every alternative tried, all paired intervals separated.
+
+**Non-facial momentary attributes get a prompt instead.** Nothing in the
+observation vocabulary names an action, so `carrying_by_hand` or `gathering`
+cannot be composed from it and are asked directly, once per frame.
 
 **Identity attributes are tracked.** Tracking exists so that K frames of the same
 person can go into one call, and that is worth its cost. Same model, same 62
@@ -240,7 +273,8 @@ bash label_attribute.sh --self-test
 ```
 
 It runs the answer parser against a set of replies, including the shapes that
-used to fail silently, and prints `11/11 passed`. Worth doing the moment the
+fail silently — valid JSON carrying none of the requested fields — and prints
+`11/11 passed`. Worth doing the moment the
 environment is built, because it separates "my environment is wrong" from "the
 model answered badly" before either can be confused for the other.
 
@@ -370,8 +404,9 @@ every answer that failed. `.csv` carries just the labels.
 bash label_attribute.sh --self-test
 ```
 
-Runs the parser against a set of answers, including the shapes that used to fail
-silently. No GPU, no model download, a second or two.
+Runs the parser against a set of answers, including the shapes that fail
+silently: valid JSON with none of the requested fields in it. No GPU, no model
+download, a second or two.
 
 ### Your data
 
@@ -427,35 +462,46 @@ Then compare `predicted positive` against the rate you expect. A prompt far off
 that rate is usually mis-thresholded rather than blind, which is a different
 repair — see [docs/RESULTS.md](docs/RESULTS.md).
 
-### What to expect from a generated prompt
+### What to expect from a new attribute
 
-**It has not been measured.** No generated prompt in this repository has been
-scored against ground truth. Both exemplar sets were written for face-visibility
-attributes, and the non-facial set is the PADQ template, which assumes a full
-scene with the target given as a box. Treat generated labels as a first pass, and
-check a sample by hand before building on them.
+**How it is labelled depends on the branch.** An identity or facial momentary
+attribute becomes a rule over the observation fields; a non-facial one gets a
+prompt of its own. Either way a label comes out — the pipeline has no path that
+stops.
 
-Two things are guaranteed rather than hoped for. The output contract — the last
-paragraph of every generated prompt, fixing the field name — is written by the
-runner, not by the model, so the answer cannot come back under a name the reader
-is not looking for. And a generated prompt is validated before use; if it comes
-back as commentary rather than instructions, the runner retries once and then
-falls back to a plain template built from your definition, saying so.
+**A rule is checked before it runs.** It may only name fields in the vocabulary
+and values those fields can take, so a rule that reaches for something that does
+not exist is rejected in microseconds and the writer is told which field and
+which value. When three attempts all fail, the attribute falls through to a
+prompt. Over 25 attributes measured that has not yet happened.
 
-For an **identity** attribute there is nothing to generate from: both exemplar
-sets are momentary. The runner uses a built-in multi-frame template instead and
-prints that it did.
+**A rule the writer is unsure of is flagged, not withheld.** After a rule passes,
+it is asked for three more; if they disagree the label ships with
+`"confidence": "low"`. That is where a reviewer should start. It is a cheap
+signal rather than a complete one: an attribute the writer is confidently wrong
+about looks the same as one it is confidently right about.
 
-Prompts land in `prompts/generated/<attr>.txt`. Edit one and re-run; it is reused
-unless you pass `--regenerate`.
+**A prompt is checked too**, for length and for whether it reads as instructions
+rather than commentary, and the output contract at the end of it — the paragraph
+fixing the field name — is written by the runner rather than the model, so an
+answer cannot come back under a name the reader is not looking for. Three failed
+attempts fall through to a plain template built from your definition.
 
-**A different model writes the prompt.** `PROMPT_MODEL` in `config/paths.sh`
-defaults to `Qwen/Qwen3.5-27B` while labelling and routing stay on
-`BASE_MODEL`. Routing asks a two-way question that 9B answers; a prompt is read
-on every one of thousands of calls afterwards, so it is worth more there. The
-writer is loaded only when there is something to generate and freed straight
-after, so the two never share the cards. Set `PROMPT_MODEL=$BASE_MODEL` to use
-one model for everything.
+**Quality follows the vocabulary.** An attribute the observation fields cover is
+read well; one they do not is answered from whatever is nearest, and that answer
+is worth less. On twelve attributes nobody wrote a rule for, the six with a
+field behind them averaged bAcc 0.749 against 0.573 for the six without.
+
+**A bigger model writes rules and prompts.** `PROMPT_MODEL` in
+`config/paths.sh` defaults to `Qwen/Qwen3.5-27B` while labelling and routing
+stay on `BASE_MODEL`. Both are text-only calls made once per attribute, so the
+cost is seconds against hours for the extraction. The writer is loaded only when
+there is something to write and freed straight after. Set
+`PROMPT_MODEL=$BASE_MODEL` to use one model for everything.
+
+Rules are recorded in `config/prompt_registry.json`, prompts in
+`prompts/generated/<attr>.txt`. Both are reused on the next run unless you pass
+`--regenerate`.
 
 ### Attribute names to avoid
 
@@ -532,7 +578,7 @@ prompt text and the reader for the answers that text asks for:
 So there are two ways to get it wrong, and neither raises:
 
 - Pointing `PROMPT` at a new file while leaving `STYLE` on a self-contained
-  style. Your file is never opened and the old prompt runs.
+  style. Your file is never opened and the style's own text runs.
 - Setting `STYLE=meta` with a prompt that answers in some other schema. The
   answer parses as valid JSON, the fields the reader wants are absent, and the
   attribute comes back empty or always-false.

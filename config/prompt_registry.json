@@ -1,28 +1,68 @@
 {
-  "_comment": [
-    "Which attributes already have a prompt written specifically for them.",
-    "Stage 0 routes an attribute; if it lands here, that prompt is reused as-is.",
-    "Anything not listed goes to pipeline/make_prompt.py, which writes a new one",
-    "from exemplars.",
-    "",
-    "This is an explicit table rather than a model judgement on purpose. Asking",
-    "the model 'can this prompt label that attribute' adds a second place for a",
-    "prompt-sensitivity failure, and the routing prompt has already been seen to",
-    "flip borderline cases when reworded. Entries here are human-verified."
-  ],
-  "identity": {
-    "gender": {"prompt": null, "note": "handled by the identity adapter, K=4"},
-    "age":    {"prompt": null, "note": "handled by the identity adapter, K=4, integer output"}
+ "_comment": [
+  "Which attributes already have something written for them, and what kind.",
+  "",
+  "  method 'synthesis' : a rule over the stage 1 observation fields. The label",
+  "                       is derived in code, so adding one costs no inference.",
+  "  method 'prompt'    : a prompt of its own, run per frame.",
+  "",
+  "Stage 0 routes an attribute; if it lands here, what is here is reused. Anything",
+  "absent goes to pipeline/make_rule.py (identity, facial) or make_prompt.py",
+  "(non-facial), and what those write is recorded back here.",
+  "",
+  "An explicit table rather than a model judgement on purpose. Asking the model",
+  "'can this cover that attribute' adds a second place for a prompt-sensitivity",
+  "failure, and the routing prompt has already been seen to flip borderline cases",
+  "when reworded. Entries here are human-verified unless author says otherwise."
+ ],
+ "identity": {
+  "gender": {
+   "prompt": null,
+   "note": "handled by the identity adapter, K=4",
+   "method": "prompt",
+   "author": "human"
   },
-  "momentary": {
-    "exposed": {"prompt": "prompts/crop/eyes.txt",  "k": 1,
-                "measured": "F1 0.689 [0.670,0.708] on 5,168 annotated instances"},
-    "watched": {"prompt": "prompts/crop/svfd.txt",  "k": 1,
-                "measured": "F1 0.740 [0.689,0.784] on 5,168 annotated instances"}
-  },
-  "exemplars": {
-    "facial": ["prompts/crop/eyes.txt", "prompts/crop/svfd.txt",
-               "prompts/crop/combined.txt"],
-    "non-facial": ["prompts/padq/exposed_v3.txt", "prompts/padq/watched_v2.txt"]
+  "age": {
+   "prompt": null,
+   "note": "handled by the identity adapter, K=4, integer output",
+   "method": "prompt",
+   "author": "human"
   }
+ },
+ "momentary": {
+  "exposed": {
+   "prompt": "prompts/crop/eyes.txt",
+   "k": 1,
+   "measured": "F1 0.689 [0.670,0.708] on 5,168 annotated instances",
+   "method": "prompt",
+   "author": "human",
+   "confidence": "high"
+  },
+  "watched": {
+   "prompt": "prompts/crop/svfd.txt",
+   "k": 1,
+   "measured": "F1 0.740 [0.689,0.784] on 5,168 annotated instances",
+   "method": "prompt",
+   "author": "human",
+   "confidence": "high"
+  }
+ },
+ "exemplars": {
+  "facial": [
+   "prompts/crop/eyes.txt",
+   "prompts/crop/svfd.txt",
+   "prompts/crop/combined.txt"
+  ],
+  "non-facial": [
+   "prompts/padq/exposed_v3.txt",
+   "prompts/padq/watched_v2.txt"
+  ]
+ },
+ "synthesis": {
+  "_comment": [
+   "Rules written against the stage 1 vocabulary in pipeline/synthesise.py.",
+   "confidence 'low' means three samples of the writer disagreed; the label",
+   "still ships, flagged, so a reviewer can start there."
+  ]
+ }
 }

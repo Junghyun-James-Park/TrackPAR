@@ -12,25 +12,47 @@ Seven stages, and which of them run depends on the attribute. Stage 0 asks the
 model one question and everything else follows from the answer.
 
 ```
-                    ┌─────────────────────────────┐
-   attribute ──────▶│ 0. route   (VLM, cached)    │
-                    └──────────────┬──────────────┘
-                      identity     │    momentary
-               ┌───────────────────┴───────────────────┐
-               ▼                                       ▼
-   ┌───────────────────────┐             ┌─────────────────────────────┐
-   │ 1. SAM 3 tracking     │             │ no tracking: the boxes      │
-   │ 2. fragments          │             │ come straight from the      │
-   │ 3. gender   K=4       │             │ annotation file             │
-   │ 4. age      K=4       │             │                             │
-   │                       │             │ facial / non-facial         │
-   │                       │             │   selects the prompt        │
-   │ one answer per TRACK  │             │ 5. one call per FRAME       │
-   │                       │             │    one answer per FRAME     │
-   └───────────┬───────────┘             └─────────────┬───────────────┘
-               └───────────────────┬───────────────────┘
-                                   ▼
-                        6. merge → labels.json
+                      attribute + definition + data
+                                    │
+                    ┌───────────────┴───────────────┬──────────────────┐
+                    ▼                               ▼                  ▼
+                identity                 momentary / facial   momentary / non-facial
+                    │                               │                  │
+              tracks (SAM 3                         │                  │
+              if not given)                         │                  │
+                    │                               │                  │
+                    └───────────────┬───────────────┘                  │
+                                    ▼                                  │
+                    ┌───────────────────────────────┐                  │
+                    │ EXTRACT observation fields    │                  │
+                    │   one call, every attribute   │                  │
+                    └───────────────┬───────────────┘                  │
+                                    ▼                                  ▼
+                    ┌───────────────────────────────┐  ┌───────────────────────────┐
+                    │ WRITE A RULE over those       │  │ WRITE A PROMPT            │
+                    │ fields                        │  │                           │
+                    └───────────────┬───────────────┘  └─────────────┬─────────────┘
+                                    ▼                                ▼
+                    ┌───────────────────────────────┐  ┌───────────────────────────┐
+                    │ VALIDATE ◀── retry 3x, told   │  │ VALIDATE ◀── retry 3x     │
+                    │   which field or value is bad │  │                           │
+                    └────────┬──────────────┬───────┘  └───────┬──────────────┬────┘
+                             │ pass         │ 3x fail          │ 3x fail      │ pass
+                             ▼              └────────┐  ┌──────┘              │
+                    ┌───────────────────┐            ▼  ▼                     │
+                    │ SYNTHESISE        │   ┌──────────────────────┐          │
+                    │   apply the rule  │   │ definition one-liner │          │
+                    │   to the stored   │   └──────────┬───────────┘          │
+                    │   fields          │              └───────┬──────────────┘
+                    │   no model call   │                      ▼
+                    └─────────┬─────────┘        ┌───────────────────────────┐
+                              │                  │ INFER                     │
+                              │                  │   one call per frame      │
+                              │                  │   per attribute           │
+                              │                  └─────────────┬─────────────┘
+                              └────────────┬───────────────────┘
+                                           ▼
+                              labels.json  +  labels.csv
 ```
 
 Routing is cached in `out/attr_routing.json`: an attribute is sent to the model
@@ -82,22 +104,87 @@ a group, and the 79 real tracks recoverable from the filenames carry enough
 annotation noise that `Age31-45` varies within 59.5% of them. The three checks
 above measure agreement with a hand-written intent, not accuracy.
 
-### After routing: which prompt
+### After routing: a rule, or a prompt
 
 ```
-momentary ──▶ does config/prompt_registry.json name a prompt for this attribute?
-                yes ──▶ reuse it
-                no  ──▶ pipeline/make_prompt.py writes one from exemplars
-                          facial     → eyes, svfd, combined
-                          non-facial → the PADQ template
+identity, or momentary/facial
+   │
+   ▼  the observation fields are already extracted
+   write a RULE over them  ──▶ validate  ──pass──▶ apply it, no further inference
+                                   │
+                              3x fail
+                                   ▼
+momentary/non-facial ──▶ write a PROMPT ──▶ validate ──▶ one call per frame
 ```
+
+An attribute on the first two branches becomes a rule over the fields stage 1
+already reports, so the second attribute on the same data costs a rule and no
+inference. The third branch has no such option: nothing in the observation
+vocabulary names an action, so `carrying_by_hand` is asked directly.
+
+**A rule can be checked before it runs, and a prompt cannot.** The rule may only
+name fields in the vocabulary and values those fields can take, so one that
+reaches for something absent is rejected in microseconds and the writer is told
+which field and which value. The comparable failure in a prompt is invisible:
+the model answers, the answer parses, and none of the fields the reader wants
+are in it.
+
+**The writer may not decline.** An earlier form of the instruction let it answer
+"not expressible", and it then used that on attributes the vocabulary did cover:
+9B refused `Hair-Length-Long` while `hair.length: long` sat in the list it had
+been handed, and 27B refused `calling` with `hands: raised_to_head` available.
+Removing the option recovered both — `calling` reached 0.706 and `ub-Jacket`
+0.466, each identical to the rule a person wrote for it. An auto-labeller has to
+return a label, so a rough rule beats no rule and the instruction says so.
+
+**Rules that pass are sampled again, and disagreement is reported rather than
+voted on.** Three further samples are drawn; if they differ the label ships with
+`confidence: low`. A majority would discard exactly the signal worth keeping:
+probed at three temperatures, the two attributes whose rules were wrong
+(`holding` −0.151, `lb-Jeans` −0.445) produced four or five distinct rules out
+of five, while the two that were right produced one or two. Disagreement tracked
+the error; a vote over the same samples re-elects the model's own bias.
+
+Measured over 25 attributes, no rule needed a retry and none fell through to a
+prompt. On the thirteen where a person had also written a rule by hand, nine
+generated rules were character-identical and eleven were within 0.02 F1; the
+median difference was zero.
 
 Reuse is decided by an explicit table rather than a second model judgement.
 Given that the routing prompt itself flips borderline cases when reworded,
-adding another judgement would add another place for that to happen. The table
-is human-verified; anything absent from it goes to generation.
+adding another judgement would add another place for that to happen.
+`config/prompt_registry.json` records what has been written, and by whom.
 
-### The one structural decision
+### Quality follows the vocabulary
+
+Synthesis works when a field covers the attribute and degrades when none does.
+On twelve attributes nobody had written a rule for, the six with a field behind
+them averaged bAcc 0.749 against 0.573 for the six without; an always-negative
+arm scores 0.500. The rules for the second group are legal and reach for
+whatever is nearest — `shoes-Sports` was expressed as `upper.color eq ['black']`
+— so nothing rejects them.
+
+That gives the vocabulary a role beyond stage 1: it sets the ceiling. Adding a
+`shoes` field and extracting again moved `shoes-Sports` from 0.266 to 0.487, and
+three fields added earlier did not dilute the ones already there
+(`facing_camera` 0.735 to 0.719 across the change).
+
+**This is a use-it-and-it-grows argument, with one part still open.** An
+attribute that goes down the prompt branch is answered from the image directly,
+so it carries information the existing fields do not; promoting a well-behaved
+one into the stage 1 schema lets every later attribute compose from it for free.
+Promoting a synthesised attribute would add nothing, since it is already a
+function of the fields. The cost is that widening the vocabulary invalidates
+every stored extraction, so promotions have to be batched rather than made one
+at a time.
+
+What is missing is the criterion. Choosing which attributes to promote needs a
+notion of "labelled well", and an auto-labeller has no ground truth to read it
+from. The `confidence` flag and the within-track flip rate are both computable
+without labels and are the obvious candidates, but neither has been tested for
+that purpose here.
+
+### The one structural decision### The one structural decision
 
 **Attributes are split by kind, and the split determines the shape of the
 answer.**
@@ -556,6 +643,10 @@ attributes — one the benchmark simply does not carry.
 | 3-class age cannot express integer-age ability | 0.9645 against a 0.9430 majority baseline | strong |
 | the PAR schema has no field for observability | 5 changeable / 36 occludable / 0 annotated | supporting |
 | an attribute can be routed automatically | 4/4 shipped attributes matched the hand-built routing; 40/40 benchmark attributes routed identity | moderate |
+| an attribute can be labelled from a rule rather than a prompt | on `facing_camera` and `facing_away`, 0.735 and 0.751, ahead of every alternative, all paired intervals separated | moderate |
+| the rule can be written by the model rather than a person | 9 of 13 generated rules character-identical to the hand-written one, 11 of 13 within 0.02 F1, median difference zero | moderate |
+| the pipeline always returns a label | no retry and no fallback over 25 attributes | supporting |
+| quality follows the vocabulary | bAcc 0.749 with a covering field against 0.573 without, on twelve attributes nobody wrote a rule for | moderate |
 
 Not claimed: that a generated prompt performs as well as a hand-written one — every momentary attribute measured here is about face visibility or gaze, and both of their prompts were written by hand. Nor that this generalises to other stores, other camera geometries, or
 other populations. Only one deployment was annotated, and 7 of its 11 sessions

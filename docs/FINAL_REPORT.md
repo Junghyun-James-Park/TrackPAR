@@ -371,8 +371,8 @@ the attribute is a fixed property of the person rather than of the frame.
 | lower body (15) | LowerBody-Length-Short, Colour × 12, Type-Trousers&Shorts, Type-Skirt&Dress | "lower body ... fixed property" |
 | accessories (5) | Backpack, Bag, Glasses-Normal, Glasses-Sun, Hat | "fixed accessory of the person" |
 
-The `facial` question is not asked here: it only changes which exemplars a
-generated prompt is written from, and that applies to momentary attributes.
+The `facial` question is not asked here: it only splits the momentary branch
+between a rule and a prompt, and nothing on this list is momentary.
 
 This is the measured form of a claim made elsewhere in this report. The public
 benchmark carries **no attribute of the kind the momentary branch exists for**.

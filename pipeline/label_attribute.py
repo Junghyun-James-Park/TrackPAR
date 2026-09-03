@@ -14,9 +14,13 @@ runs inference and writes JSON and CSV.
 What happens, in order:
 
     0  route      identity or momentary? momentary -> facial or not?  (cached)
-    1  prompt     already in config/prompt_registry.json -> reuse it
-                  otherwise -> write one from exemplars
-    2  infer      momentary: one call per image (K=1, no tracking)
+    1  rule or    already in config/prompt_registry.json -> reuse it
+       prompt     identity and facial momentary -> write a rule over the
+                  observation fields; non-facial momentary -> write a prompt
+                  from the PADQ template. Both are validated, retried 3x, and
+                  fall back to the definition on the fourth failure.
+    2  infer      a rule is applied to the stored fields, no model call
+                  a prompt runs one call per image (K=1, no tracking)
                   identity:  K frames of one subject in a single call
     3  write      <out>.json and <out>.csv
 

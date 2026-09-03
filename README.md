@@ -180,38 +180,14 @@ recording that.
 
 ### What stage 0 does with a new attribute
 
-```
-route ──▶ identity ──▶ K frames of one subject in a single call
-      │                  gender and age use the identity adapter;
-      │                  any other identity attribute runs on the base model
-      │
-      └─▶ momentary ──▶ is there a prompt written for this attribute?
-                          │
-                    yes ──┴──▶ reuse it        (config/prompt_registry.json)
-                     no  ─────▶ generate one, from exemplars
-                                  facial     → eyes, svfd, combined
-                                  non-facial → the PADQ template
-```
+Identity attributes and facial momentary ones take the rule path: gender and age
+run on the identity adapter, everything else composes a rule over the stored
+observation fields. Non-facial momentary attributes take the prompt path.
 
-The two exemplar families also differ in **what the model is shown**, which is
-the part that is easy to miss:
-
-| | crop family (`prompts/crop/`) | PADQ (`prompts/padq/`) |
-|---|---|---|
-| images per call | 2 | 1 |
-| what they are | the full scene with the target in a red box, **and** a crop of that person with the background removed | the full scene only |
-| how the target is named | visually, by the box and the crop | in text, as `{bboxes}` coordinates |
-| people per call | 1 | all `{n}` of them |
-| attributes per call | several observation fields | 1 |
-
-Both were measured under `--repr full_mask`, which is what produces that pair of
-images, and it is also the deployment default. So the crop family never sees a
-crop on its own; it sees the scene as well. The directory name is shorter than
-the truth.
-
-Whether an existing prompt is reused comes from an explicit table, not a model
-judgement. Two of the four shipped attributes have prompts written specifically
-for them; anything else goes to generation.
+Before either, the registry is consulted. Whether an existing prompt or rule is
+reused comes from an explicit table, not a model judgement. Two of the four
+shipped attributes have prompts written specifically for them; anything else is
+written on the spot.
 
 All of this is what [`label_attribute.sh`](#labelling-a-new-attribute) runs for
 you, and that is the normal way in. The stages are also separately callable,
@@ -389,11 +365,14 @@ What runs, and in what order:
 **0. route** — identity or momentary, and if momentary, facial or not. Cached in
 `out/attr_routing.json`, so an attribute is asked about once.
 
-**1. prompt** — already in `config/prompt_registry.json`? Reuse the measured one.
-Otherwise write one from exemplars.
+**1. rule or prompt** — already in `config/prompt_registry.json`? Reuse the
+measured one. Otherwise write a rule over the observation fields (identity and
+facial momentary) or a prompt from the PADQ template (non-facial momentary),
+validate it, and retry up to three times before falling back to the definition.
 
-**2. infer** — momentary runs one call per image at K=1 with no tracking;
-identity puts K frames of one subject into a single call.
+**2. infer** — a rule is applied to the stored fields with no further model call.
+A prompt runs one call per image at K=1 with no tracking; identity puts K frames
+of one subject into a single call.
 
 **3. write** — `.json` carries the routing, the prompt source and the raw text of
 every answer that failed. `.csv` carries just the labels.
@@ -614,6 +593,11 @@ families are the interesting part.
 
 ### `prompts/crop/` — one person per call, scene plus crop
 
+All of these were scored under `--repr full_mask`, which is also the deployment
+default. That is two images per call: the full scene with the target in a red
+box, and a crop of that person with the background removed. The directory name
+is shorter than the truth, because the crop never arrives on its own.
+
 | prompt | idea |
 |---|---|
 | `plain` | Ask for the attribute directly, with a one-line definition. The control. |
@@ -637,10 +621,11 @@ visibility judgement and repeats it three times, so there is nothing to combine.
 
 ### `prompts/padq/` — full scene, one attribute per call
 
-The people are already detected; the prompt names them by bounding box and asks a
-single true/false question about each. `exposed_v3` and `watched_v2` differ only
-in the attribute name and its definition — **the rest is a template**, which is
-why this family is what stage 0 generates from for a new non-facial attribute.
+One image per call, and all the people in it. They are already detected, so the
+prompt names them in text as `{bboxes}` coordinates and asks a single true/false
+question about each. `exposed_v3` and `watched_v2` differ only in the attribute
+name and its definition — **the rest is a template**, which is why this family is
+what a new non-facial attribute is written from.
 
 It also needs no crop and no track: a frame and its boxes are enough.
 

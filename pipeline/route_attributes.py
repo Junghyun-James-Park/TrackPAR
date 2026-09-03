@@ -5,10 +5,11 @@ An auto-labeller is handed an attribute and has to work out the rest. Everything
 downstream follows from one question: is this a property of the PERSON or of the
 FRAME?
 
-    identity   holds for the whole track   -> track, then K frames in one call
+    identity   holds for the whole track   -> track, then K frames in one call,
+                                              and a rule over the observations
     momentary  can differ frame to frame   -> no tracking, one call per frame
-      facial       decided from face/gaze  -> exemplars from the eyes/svfd family
-      non-facial   decided from body/hands -> exemplars from the PADQ template
+      facial       decided from face/gaze  -> a rule over the observations
+      non-facial   decided from body/hands -> a prompt from the PADQ template
 
 `facial` is asked only for momentary attributes. For identity it makes no
 difference: the route is the same whether the attribute sits on the face or the

@@ -76,6 +76,12 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUTDIR = os.environ.get("TRACKPAR_OUT", os.path.join(ROOT, "out"))
 REGISTRY = os.path.join(ROOT, "config", "prompt_registry.json")
 GEN_DIR = os.path.join(ROOT, "prompts", "generated")
+# Attempts allowed before an attribute falls back to the definition one-liner.
+# Both branches get the same budget: make_rule.MAX_TRIES is this number, and the
+# pipeline figure in the README states one retry count for both. A generated
+# prompt is retried with the validator's complaint appended, so each attempt
+# sees a different input even though generation is greedy.
+MAX_TRIES = 3
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 IMG_EXT = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
@@ -396,7 +402,7 @@ def get_prompt(attr, definition, routing, model, proc, force_regen=False,
 
     print(f"  generating a prompt ({kind}, {len(exemplars)} exemplars)", flush=True)
     body = ""
-    for attempt in (1, 2):
+    for attempt in range(1, MAX_TRIES + 1):
         msg = [{"role": "user", "content": [{"type": "text", "text": full}]}]
         s = gproc.apply_chat_template(msg, tokenize=False,
                                       add_generation_prompt=True,
